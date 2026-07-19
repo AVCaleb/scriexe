@@ -41,3 +41,11 @@ def test_no_nasb_on_key_raises(corpus_root, monkeypatch):
                         lambda url, key: {"data": [{"id": "x", "abbreviation": "KJV", "name": "KJV"}]})
     with pytest.raises(apibible.Unavailable, match="exeg import"):
         apibible.get_passage(parse_ref("1Pet 3:18"))
+
+def test_nasb_non_1995_rejected(corpus_root, monkeypatch):
+    monkeypatch.setenv("API_BIBLE_KEY", "k")
+    monkeypatch.setattr(apibible, "_http_json",
+                        lambda url, key: {"data": [{"id": "n2020", "abbreviation": "NASB",
+                                                     "name": "New American Standard Bible 2020"}]})
+    with pytest.raises(apibible.Unavailable, match="exeg import"):
+        apibible.get_passage(parse_ref("1Pet 3:18"))

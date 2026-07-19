@@ -16,7 +16,10 @@ def _load_env() -> None:
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             key, _, val = line.partition("=")
-            os.environ.setdefault(key.strip(), val.strip())
+            v = val.strip()
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                v = v[1:-1]
+            os.environ.setdefault(key.strip(), v)
 
 
 def build_parser() -> argparse.ArgumentParser:

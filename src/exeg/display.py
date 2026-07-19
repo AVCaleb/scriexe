@@ -27,7 +27,7 @@ def gather(ref: Ref, versions: list[str]):
     texts: dict[str, dict[tuple[int, int], str]] = {}
     notes: list[str] = []
     for version in versions:
-        if version in ("esv", "nasb95") and not corpus.has_version(version):
+        if version in ("esv", "nasb95") and not corpus.has_book(version, ref.book.osis):
             try:
                 texts[version] = _api_texts(version, ref)
             except LookupError as e:

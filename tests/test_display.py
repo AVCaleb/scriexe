@@ -42,3 +42,13 @@ def test_cli_bad_ref_message(corpus_root, capsys):
     from exeg.cli import main
     assert main(["passage", "Filippians 1:1"]) == 1
     assert "Did you mean" in capsys.readouterr().err
+
+def test_local_import_checked_per_book(corpus_root, monkeypatch):
+    monkeypatch.delenv("ESV_API_KEY", raising=False)
+    monkeypatch.delenv("API_BIBLE_KEY", raising=False)
+    corpus.write_verses("nasb95", "1Pet", [Verse(3, 18, "local nasb text")])
+    out = display.render(parse_ref("1Pet 3:18"), ["nasb95"])
+    assert "local nasb text" in out
+    out2 = display.render(parse_ref("John 11:35"), ["nasb95"])
+    assert "> NASB95 unavailable" in out2
+    assert "[not in NASB95]" not in out2

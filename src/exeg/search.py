@@ -97,14 +97,21 @@ def word_occurrences(query: str) -> dict:
     for _, osis, *_rest in occurrences:
         by_book[osis] = by_book.get(osis, 0) + 1
     return {"query": query, "strongs": strongs, "lemma": lemma or found_lemma or entry.get("lemma", ""),
-            "gloss": entry.get("strongs_def", "") or entry.get("kjv_def", ""),
+            "gloss": (entry.get("strongs_def", "") or entry.get("kjv_def", "")).strip(),
             "occurrences": occurrences, "by_book": by_book}
 
 
 def cmd_search(args) -> int:
     versions = args.versions.split(",") if args.versions else (["web", "kjv", "cuvs"] if not args.lemma else ["sblgnt", "wlc"])
-    book = canon.find_book(args.book).osis if args.book else None
-    hits = search_text(args.pattern, versions, book=book, lemma=args.lemma)
+    try:
+        book = canon.find_book(args.book).osis if args.book else None
+        hits = search_text(args.pattern, versions, book=book, lemma=args.lemma)
+    except canon.UnknownBook as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    except re.error as e:
+        print(f"bad pattern: {e}", file=sys.stderr)
+        return 1
     for version, osis, ch, v, text in hits[: args.limit]:
         print(f"{version:7s} {osis} {ch}:{v}  {text}")
     extra = len(hits) - args.limit

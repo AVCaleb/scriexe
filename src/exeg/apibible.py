@@ -60,8 +60,8 @@ def _bible_id(cache: dict, key: str) -> str:
     except Exception as e:
         raise Unavailable(f"API.Bible error: {e}") from e
     nasb = [b for b in data
-            if "NASB" in (b.get("abbreviation", "") + b.get("abbreviationLocal", ""))]
-    nasb.sort(key=lambda b: "1995" not in b.get("name", ""))
+            if "NASB" in (b.get("abbreviation", "") + b.get("abbreviationLocal", ""))
+            and "1995" in b.get("name", "")]
     if not nasb:
         raise Unavailable("NASB95 is not available on this API.Bible key — "
                           "use `exeg import` with your own licensed copy instead")
@@ -92,6 +92,8 @@ def _fetch_verse(key: str, bid: str, vid: str) -> str:
 
 def get_passage(ref: Ref) -> dict:
     cache = _load_cache()
+    had_id = bool(cache.get("bible_id"))
+    listings_before = len(cache["chapter_verses"])
     usfm = ref.book.usfm
     key = None
 
@@ -124,7 +126,7 @@ def get_passage(ref: Ref) -> dict:
             cache["verses"][k] = {"t": text, "at": now}
             dirty = True
         out[(ch, v)] = cache["verses"][k]["t"]
-    if dirty or cache.get("bible_id"):
+    if dirty or not had_id or len(cache["chapter_verses"]) != listings_before:
         _save_cache(cache)
     if not out:
         raise Unavailable(f"NASB95: no verses found for {ref.en_label()}")

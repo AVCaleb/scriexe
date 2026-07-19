@@ -173,3 +173,4 @@ occurrence references. Analysis prose is left blank for the user/agent.
 - English display versions are ESV + NASB95 (user decision 2026-07-19),
   sourced via official APIs with a user-import fallback for NASB95; WEB/KJV
   remain in the local corpus only as the public-domain English search layer.
+- Integrity checking is chapter-level (contiguous chapters per book), not verse-count-level: canonical verse counts vary by versification, and ebible sources legitimately omit footnote-only verses. Accepted at final review 2026-07-19.

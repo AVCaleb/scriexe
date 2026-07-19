@@ -60,3 +60,13 @@ def test_cli(corpus_root, capsys):
     assert main(["word", "G3958"]) == 0
     out = capsys.readouterr().out
     assert "πάσχω" in out and "2×" in out
+
+def test_cli_search_unknown_book(corpus_root, capsys):
+    from exeg.cli import main
+    assert main(["search", "x", "--book", "zzz"]) == 1
+    assert "Unknown book" in capsys.readouterr().err
+
+def test_cli_search_bad_pattern(corpus_root, capsys):
+    from exeg.cli import main
+    assert main(["search", "("]) == 1
+    assert "bad pattern" in capsys.readouterr().err

@@ -2,7 +2,6 @@
 
 The imported text stays inside data/ (gitignored) and is never redistributed.
 """
-import sys
 from pathlib import Path
 
 from exeg import canon, corpus, refs, usfm

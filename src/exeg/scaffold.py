@@ -35,9 +35,10 @@ def pick_words(ref: Ref) -> list[Word]:
             continue
         if not ref.book.nt and w.strongs in HEBREW_STOP:
             continue
-        if w.lemma in seen:
+        key = w.strongs or w.lemma
+        if key in seen:
             continue
-        seen.add(w.lemma)
+        seen.add(key)
         picked.append(w)
         if len(picked) >= MAX_WORDS:
             break
@@ -50,7 +51,7 @@ def _word_section(ref: Ref) -> list[str]:
     lines: list[str] = []
     for w in pick_words(ref):
         occ = [x for x in corpus.read_words(version, ref.book.osis)
-               if x.lemma == w.lemma]
+               if (x.strongs == w.strongs if w.strongs else x.lemma == w.lemma)]
         refs_s = ", ".join(f"{o.chapter}:{o.verse}" for o in
                            sorted({(o.chapter, o.verse): o for o in occ}.values(),
                                   key=lambda o: (o.chapter, o.verse))[:MAX_REFS])
@@ -58,9 +59,11 @@ def _word_section(ref: Ref) -> list[str]:
         if uniq > MAX_REFS:
             refs_s += ", …"
         entry = (greek.get(w.strongs) or hebrew.get(w.strongs) or {})
-        gloss = entry.get("strongs_def", "") or entry.get("kjv_def", "") or "—"
+        heading_lemma = entry.get("lemma") or w.lemma
+        gloss = (entry.get("strongs_def", "") or entry.get("kjv_def", "") or "—").strip()
         surface = w.surface.replace("/", "")
-        lines.append(f"### {w.lemma} ({surface}, v. {w.verse}) — {w.strongs or '?'} · "
+        surface = re.sub(r"^[⸀⸁⸂⸃\s]+|[⸀⸁⸂⸃,.;·—\s]+$", "", surface)
+        lines.append(f"### {heading_lemma} ({surface}, v. {w.verse}) — {w.strongs or '?'} · "
                      f"{search.greek_morph_label(w.morph)}")
         lines.append(f"gloss: {gloss} · in {ref.book.en}: {uniq}× ({refs_s})")
         lines.append("（your analysis · 你的分析）")
@@ -101,7 +104,7 @@ def build(ref: Ref, versions: list[str] | None = None, today: str | None = None)
     if "esv" in texts and texts["esv"]:
         from exeg import esv
         out.append(esv.NOTICE)
-    if "nasb95" in texts and texts["nasb95"] and not corpus.has_version("nasb95"):
+    if "nasb95" in texts and texts["nasb95"] and not corpus.has_book("nasb95", ref.book.osis):
         from exeg import apibible
         out.append(apibible.NOTICE)
     if ("sblgnt" in texts and texts["sblgnt"]):

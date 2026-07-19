@@ -65,6 +65,7 @@ def test_ot_scaffold_hebrew_path(corpus_root, monkeypatch):
         Word(1, 1, 1, "בְּ/רֵאשִׁ֖ית", "b/7225", "H7225", "HR/Ncfsa"),
         Word(1, 1, 2, "בָּרָ֣א", "1254 a", "H1254", "HVqp3ms"),
         Word(1, 1, 3, "אֵ֥ת", "853", "H853", "HTo"),
+        Word(3, 5, 1, "רֵאשִׁית", "c/7225", "H7225", "HR/Ncfsa"),
     ])
     sdir = corpus.corpus_dir() / "strongs"
     sdir.mkdir(parents=True, exist_ok=True)
@@ -75,9 +76,18 @@ def test_ot_scaffold_hebrew_path(corpus_root, monkeypatch):
     picked = scaffold.pick_words(parse_ref("Gen 1:1"))
     assert [w.strongs for w in picked] == ["H7225", "H1254"]   # noun via segment alignment, verb; particle excluded
     md = scaffold.build(parse_ref("Gen 1:1"), today="2026-07-19")
-    assert "### b/7225 (בְּרֵאשִׁ֖ית, v. 1) — H7225 · HR/Ncfsa" in md
-    assert "gloss: the first · in Genesis: 1× (1:1)" in md
+    assert "### רֵאשִׁית (בְּרֵאשִׁ֖ית, v. 1) — H7225 · HR/Ncfsa" in md
+    assert "gloss: the first · in Genesis: 2× (1:1, 3:5)" in md
     assert "HVqp3ms" in md                                     # Hebrew morph stays raw, no crash
+
+def test_local_nasb95_used_without_notice(corpus_root, monkeypatch):
+    seed(corpus_root)
+    corpus.write_verses("nasb95", "1Pet", [Verse(3, 18, "local nasb")])
+    monkeypatch.delenv("ESV_API_KEY", raising=False)
+    monkeypatch.delenv("API_BIBLE_KEY", raising=False)
+    md = scaffold.build(parse_ref("1Pet 3:18-19"), today="2026-07-19")
+    assert "- **NASB95** local nasb" in md
+    assert "Lockman" not in md
 
 def test_section_order(corpus_root, monkeypatch):
     seed(corpus_root)
