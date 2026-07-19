@@ -55,6 +55,13 @@ def build_parser() -> argparse.ArgumentParser:
     wp.add_argument("query", help="G3958, H1254, or a lemma like πάσχω")
     wp.add_argument("--limit", type=int, default=30)
     wp.set_defaults(func=_search.cmd_word)
+
+    from exeg import scaffold as _scaffold
+    sc = sub.add_parser("scaffold", help="generate a bilingual study file")
+    sc.add_argument("ref")
+    sc.add_argument("--versions", help="comma list (default: originals,esv,nasb95,cuvs)")
+    sc.add_argument("--force", action="store_true", help="overwrite an existing study file")
+    sc.set_defaults(func=_scaffold.cmd_scaffold)
     return p
 
 
