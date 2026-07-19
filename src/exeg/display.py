@@ -12,14 +12,15 @@ def default_versions(book: Book) -> list[str]:
 
 
 def _api_texts(version: str, ref: Ref) -> dict[tuple[int, int], str]:
-    """ESV via Crossway API; NASB95 wired in Task 9. Local corpus wins if present."""
+    """Copyrighted versions come from official APIs; a locally imported copy wins (checked in gather)."""
     if version == "esv":
-        from exeg import esv
-        try:
-            return esv.get_passage(ref)
-        except esv.Unavailable as e:
-            raise LookupError(str(e)) from e
-    raise LookupError(f"{LABELS[version]} unavailable — set API_BIBLE_KEY in .env or run `exeg import`")
+        from exeg import esv as mod
+    else:
+        from exeg import apibible as mod
+    try:
+        return mod.get_passage(ref)
+    except mod.Unavailable as e:
+        raise LookupError(str(e)) from e
 
 
 def gather(ref: Ref, versions: list[str]):
