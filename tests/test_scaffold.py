@@ -57,3 +57,35 @@ def test_cli(corpus_root, capsys):
     from exeg.cli import main
     assert main(["scaffold", "彼前3:18-19"]) == 0
     assert "studies/1pet_3.18-19.md" in capsys.readouterr().out
+
+def test_ot_scaffold_hebrew_path(corpus_root, monkeypatch):
+    monkeypatch.delenv("ESV_API_KEY", raising=False)
+    monkeypatch.delenv("API_BIBLE_KEY", raising=False)
+    corpus.write_words("wlc", "Gen", [
+        Word(1, 1, 1, "בְּ/רֵאשִׁ֖ית", "b/7225", "H7225", "HR/Ncfsa"),
+        Word(1, 1, 2, "בָּרָ֣א", "1254 a", "H1254", "HVqp3ms"),
+        Word(1, 1, 3, "אֵ֥ת", "853", "H853", "HTo"),
+    ])
+    sdir = corpus.corpus_dir() / "strongs"
+    sdir.mkdir(parents=True, exist_ok=True)
+    (sdir / "greek.json").write_text("{}", encoding="utf-8")
+    (sdir / "greek-lemma-map.json").write_text("{}", encoding="utf-8")
+    (sdir / "hebrew.json").write_text(json.dumps(
+        {"H7225": {"lemma": "רֵאשִׁית", "strongs_def": "the first"}}), encoding="utf-8")
+    picked = scaffold.pick_words(parse_ref("Gen 1:1"))
+    assert [w.strongs for w in picked] == ["H7225", "H1254"]   # noun via segment alignment, verb; particle excluded
+    md = scaffold.build(parse_ref("Gen 1:1"), today="2026-07-19")
+    assert "### b/7225 (בְּרֵאשִׁ֖ית, v. 1) — H7225 · HR/Ncfsa" in md
+    assert "gloss: the first · in Genesis: 1× (1:1)" in md
+    assert "HVqp3ms" in md                                     # Hebrew morph stays raw, no crash
+
+def test_section_order(corpus_root, monkeypatch):
+    seed(corpus_root)
+    monkeypatch.delenv("ESV_API_KEY", raising=False)
+    monkeypatch.delenv("API_BIBLE_KEY", raising=False)
+    md = scaffold.build(parse_ref("1Pet 3:18-19"), today="2026-07-19")
+    order = ["## Text · 经文对照", "## Word Studies · 字词研究",
+             "## Structure & Context · 结构与背景", "## Interpretation · 释经结论",
+             "## Theology & Application · 神学综合与应用", "\n---"]
+    positions = [md.index(h) for h in order]
+    assert positions == sorted(positions)
