@@ -41,6 +41,20 @@ def build_parser() -> argparse.ArgumentParser:
     ip.add_argument("--version", required=True, help="corpus version name, e.g. nasb95")
     ip.add_argument("--format", choices=["usfm", "tsv"], help="override detection")
     ip.set_defaults(func=_importer.cmd_import)
+
+    from exeg import search as _search
+    sp = sub.add_parser("search", help="search the corpus (regex)")
+    sp.add_argument("pattern")
+    sp.add_argument("--versions", help="comma list (default web,kjv,cuvs; with --lemma: sblgnt,wlc)")
+    sp.add_argument("--book", help="restrict to one book")
+    sp.add_argument("--lemma", action="store_true", help="match lemmas in Greek/Hebrew corpora")
+    sp.add_argument("--limit", type=int, default=50)
+    sp.set_defaults(func=_search.cmd_search)
+
+    wp = sub.add_parser("word", help="word study: occurrences of a Strong's number or lemma")
+    wp.add_argument("query", help="G3958, H1254, or a lemma like πάσχω")
+    wp.add_argument("--limit", type=int, default=30)
+    wp.set_defaults(func=_search.cmd_word)
     return p
 
 
