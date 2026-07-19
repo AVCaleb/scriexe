@@ -1,28 +1,31 @@
 # 1 Peter 3:18–22 · 彼得前书 3:18–22
-> scaffolded 2026-07-19 · SBLGNT | ESV | NASB95 | 和合本
+> scaffolded 2026-07-19 · SBLGNT | WEB | 和合本
 
 ## Text · 经文对照
 
-> ESV unavailable — set ESV_API_KEY in .env (free key: api.esv.org)
-> NASB95 unavailable — set API_BIBLE_KEY in .env (free key: scripture.api.bible) or run `exeg import`
 ### 1 Peter 3:18 · 彼前 3:18
 - **SBLGNT** ὅτι καὶ Χριστὸς ἅπαξ περὶ ἁμαρτιῶν ⸀ἔπαθεν, δίκαιος ὑπὲρ ἀδίκων, ἵνα ⸀ὑμᾶς προσαγάγῃ τῷ θεῷ, θανατωθεὶς μὲν σαρκὶ ζῳοποιηθεὶς δὲ πνεύματι·
+- **WEB** Because Christ also suffered for sins once, the righteous for the unrighteous, that he might bring you to God, being put to death in the flesh, but made alive in the Spirit,
 - **和合本** 因基督也曾一次为罪受苦，就是义的代替不义的，为要引我们到 神面前。按着肉体说，他被治死；按着灵性说，他复活了。
 
 ### 1 Peter 3:19 · 彼前 3:19
 - **SBLGNT** ἐν ᾧ καὶ τοῖς ἐν φυλακῇ πνεύμασιν πορευθεὶς ἐκήρυξεν,
+- **WEB** in whom he also went and preached to the spirits in prison,
 - **和合本** 他借这灵曾去传道给那些在监狱里的灵听，
 
 ### 1 Peter 3:20 · 彼前 3:20
 - **SBLGNT** ἀπειθήσασίν ποτε ὅτε ἀπεξεδέχετο ἡ τοῦ θεοῦ μακροθυμία ἐν ἡμέραις Νῶε κατασκευαζομένης κιβωτοῦ εἰς ἣν ⸀ὀλίγοι, τοῦτ’ ἔστιν ὀκτὼ ψυχαί, διεσώθησαν δι’ ὕδατος.
+- **WEB** who before were disobedient when God waited patiently in the days of Noah while the ship was being built. In it, few, that is, eight souls, were saved through water.
 - **和合本** 就是那从前在 挪亚预备方舟、 神容忍等待的时候，不信从的人。当时进入方舟，借着水得救的不多，只有八个人。
 
 ### 1 Peter 3:21 · 彼前 3:21
 - **SBLGNT** ὃ ⸂καὶ ὑμᾶς ἀντίτυπον νῦν⸃ σῴζει βάπτισμα, οὐ σαρκὸς ἀπόθεσις ῥύπου ἀλλὰ συνειδήσεως ἀγαθῆς ἐπερώτημα εἰς θεόν, δι’ ἀναστάσεως Ἰησοῦ Χριστοῦ,
+- **WEB** This is a symbol of baptism, which now saves you—not the putting away of the filth of the flesh, but the answer of a good conscience toward God—through the resurrection of Jesus Christ,
 - **和合本** 这水所表明的洗礼，现在借着耶稣基督复活也拯救你们； 这洗礼本不在乎除掉肉体的污秽，只求在 神面前有无亏的良心。
 
 ### 1 Peter 3:22 · 彼前 3:22
 - **SBLGNT** ὅς ἐστιν ἐν ⸀δεξιᾷ θεοῦ πορευθεὶς εἰς οὐρανὸν ὑποταγέντων αὐτῷ ἀγγέλων καὶ ἐξουσιῶν καὶ δυνάμεων.
+- **WEB** who is at the right hand of God, having gone into heaven, angels and authorities and powers being made subject to him.
 - **和合本** 耶稣已经进入天堂，在 神的右边；众天使和有权柄的，并有能力的，都服从了他。
 
 ## Word Studies · 字词研究
