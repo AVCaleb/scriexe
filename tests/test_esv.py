@@ -47,3 +47,31 @@ def test_cache_capped_at_500(corpus_root, monkeypatch):
     saved = json.loads(path.read_text())
     assert len(saved["verses"]) <= 500
     assert "1Pet.3.18" in saved["verses"]          # newest kept
+
+def test_eviction_invalidates_chapter_marker(corpus_root, monkeypatch):
+    monkeypatch.setenv("ESV_API_KEY", "k")
+    path = corpus.cache_dir() / "esv.json"
+    verses = {f"Ps.1.{v}": {"t": "x", "at": 1.0} for v in range(1, 7)}
+    verses.update({f"Isa.{c}.{v}": {"t": "y", "at": 1000.0 + c * 200 + v}
+                   for c in (1, 2, 3) for v in range(1, 180)})
+    path.write_text(json.dumps({"verses": verses, "chapters": ["Ps.1"]}))
+    monkeypatch.setattr(esv, "_http_json", lambda url, headers: PASSAGE)
+    esv.get_passage(parse_ref("1Pet 3:18-19"))          # triggers save + eviction
+    saved = json.loads(path.read_text())
+    assert "Ps.1" not in saved["chapters"]              # marker invalidated with its verses
+    calls = []
+    monkeypatch.setattr(esv, "_http_json", lambda url, headers: calls.append(url) or {"passages": ["[1] a [2] b [3] c [4] d [5] e [6] f"]})
+    esv.get_passage(parse_ref("Ps 1"))                  # must re-fetch, not serve stale partial
+    assert calls
+
+def test_cross_chapter_served_from_fully_cached_chapters(corpus_root, monkeypatch):
+    monkeypatch.setenv("ESV_API_KEY", "k")
+    path = corpus.cache_dir() / "esv.json"
+    verses = {f"Gen.1.{v}": {"t": f"g1v{v}", "at": 1.0} for v in (30, 31)}
+    verses.update({f"Gen.2.{v}": {"t": f"g2v{v}", "at": 1.0} for v in (1, 2, 3)})
+    path.write_text(json.dumps({"verses": verses, "chapters": ["Gen.1", "Gen.2"]}))
+    def boom(url, headers):
+        raise AssertionError("cache should have satisfied this")
+    monkeypatch.setattr(esv, "_http_json", boom)
+    got = esv.get_passage(parse_ref("Gen 1:31-2:2"))
+    assert got == {(1, 31): "g1v31", (2, 1): "g2v1", (2, 2): "g2v2"}

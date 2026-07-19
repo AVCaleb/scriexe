@@ -44,8 +44,11 @@ def _load_cache() -> dict:
 def _save_cache(cache: dict) -> None:
     vs = cache["verses"]
     if len(vs) > CAP:
-        for k in sorted(vs, key=lambda k: vs[k]["at"])[: len(vs) - CAP]:
+        evict = sorted(vs, key=lambda k: vs[k]["at"])[: len(vs) - CAP]
+        gone = {k.rsplit(".", 1)[0] for k in evict}
+        for k in evict:
             del vs[k]
+        cache["chapters"] = [c for c in cache["chapters"] if c not in gone]
     _cache_path().write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
 
 
@@ -64,15 +67,19 @@ def _from_cache(cache: dict, ref: Ref):
             if b == osis and int(ch) == ref.chapter:
                 out[(int(ch), int(v))] = e["t"]
         return out or None
-    wanted = [(ch, v) for ch in range(ref.chapter, ref.end_chapter + 1)
-              for v in range(1, 200)
-              if ref.contains(ch, v) and _key(osis, ch, v) in cache["verses"]]
-    # cache satisfies only if every explicitly requested verse of a same-chapter range is present;
-    # for cross-chapter ranges we cannot know middle-chapter lengths, so require an API round trip
     if ref.chapter == ref.end_chapter:
         need = [(ref.chapter, v) for v in range(ref.verse, ref.end_verse + 1)]
         if all(_key(osis, ch, v) in cache["verses"] for ch, v in need):
             return {(ch, v): cache["verses"][_key(osis, ch, v)]["t"] for ch, v in need}
+        return None
+    # cross-chapter: serve from cache only when every covered chapter is fully cached
+    if all(f"{osis}.{ch}" in cache["chapters"] for ch in range(ref.chapter, ref.end_chapter + 1)):
+        out = {}
+        for k, e in cache["verses"].items():
+            b, ch, v = k.rsplit(".", 2)
+            if b == osis and ref.contains(int(ch), int(v)):
+                out[(int(ch), int(v))] = e["t"]
+        return out or None
     return None
 
 
