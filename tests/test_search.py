@@ -42,6 +42,16 @@ def test_morph_label():
     assert search.greek_morph_label("N-/----NSF-") == "nom sg f"
     assert search.greek_morph_label("HVqp3ms") == "HVqp3ms"   # Hebrew stays raw
 
+def test_word_by_strongs_does_not_widen_to_shared_lemma(corpus_root):
+    seed(corpus_root)
+    corpus.write_words("wlc", "Gen", [
+        Word(1, 1, 1, "ברא", "1254 a", "H1254", "HVqp3ms"),
+        Word(1, 2, 1, "ברא", "1254 a", "H1255", "HVqp3ms"),
+    ])
+    r = search.word_occurrences("H1254")
+    assert r["by_book"] == {"Gen": 1}
+    assert r["lemma"] == "1254 a"
+
 def test_cli(corpus_root, capsys):
     seed(corpus_root)
     from exeg.cli import main

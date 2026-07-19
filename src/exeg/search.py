@@ -78,18 +78,25 @@ def word_occurrences(query: str) -> dict:
                     strongs = code
                     break
     occurrences = []
+    found_lemma = ""
+    query_is_strongs = bool(strongs) and not lemma
     for version in sorted(corpus.WORD_VERSIONS):
         for b in canon.BOOKS:
             for w in corpus.read_words(version, b.osis):
-                if (strongs and w.strongs == strongs) or (lemma and unicodedata.normalize("NFC", w.lemma) == lemma):
+                if query_is_strongs:
+                    hit = w.strongs == strongs
+                else:
+                    hit = (unicodedata.normalize("NFC", w.lemma) == lemma
+                           or (strongs and w.strongs == strongs))
+                if hit:
                     occurrences.append((version, b.osis, w.chapter, w.verse, w.surface, w.morph))
-                    if not lemma and w.lemma:
-                        lemma = unicodedata.normalize("NFC", w.lemma)
+                    if not found_lemma and w.lemma:
+                        found_lemma = unicodedata.normalize("NFC", w.lemma)
     entry = greek.get(strongs) or hebrew.get(strongs) or {}
     by_book: dict[str, int] = {}
     for _, osis, *_rest in occurrences:
         by_book[osis] = by_book.get(osis, 0) + 1
-    return {"query": query, "strongs": strongs, "lemma": lemma or entry.get("lemma", ""),
+    return {"query": query, "strongs": strongs, "lemma": lemma or found_lemma or entry.get("lemma", ""),
             "gloss": entry.get("strongs_def", "") or entry.get("kjv_def", ""),
             "occurrences": occurrences, "by_book": by_book}
 
