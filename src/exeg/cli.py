@@ -28,6 +28,12 @@ def build_parser() -> argparse.ArgumentParser:
     f = sub.add_parser("fetch", help="download and normalize all datasets")
     f.add_argument("--only", help="comma list: strongs,sblgnt,wlc,ebible")
     f.set_defaults(func=_fetch.cmd_fetch)
+
+    from exeg import display as _display
+    pp = sub.add_parser("passage", help="print a passage in parallel versions")
+    pp.add_argument("ref", help="e.g. '1Pet 3:18-22' or '彼前3:18-22'")
+    pp.add_argument("--versions", help="comma list, e.g. sblgnt,esv,cuvs")
+    pp.set_defaults(func=_display.cmd_passage)
     return p
 
 
