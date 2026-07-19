@@ -22,7 +22,12 @@ def _load_env() -> None:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="exeg", description=__doc__)
     p.add_argument("--version", action="store_true", help="print version and exit")
-    p.add_subparsers(dest="command")
+    sub = p.add_subparsers(dest="command")
+
+    from exeg import fetch as _fetch
+    f = sub.add_parser("fetch", help="download and normalize all datasets")
+    f.add_argument("--only", help="comma list: strongs,sblgnt,wlc,ebible")
+    f.set_defaults(func=_fetch.cmd_fetch)
     return p
 
 
