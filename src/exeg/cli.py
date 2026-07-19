@@ -34,6 +34,13 @@ def build_parser() -> argparse.ArgumentParser:
     pp.add_argument("ref", help="e.g. '1Pet 3:18-22' or '彼前3:18-22'")
     pp.add_argument("--versions", help="comma list, e.g. sblgnt,esv,cuvs")
     pp.set_defaults(func=_display.cmd_passage)
+
+    from exeg import importer as _importer
+    ip = sub.add_parser("import", help="import a user-licensed translation (kept local)")
+    ip.add_argument("path", help="a .usfm/.sfm file, a directory of them, or a REF<TAB>text .tsv")
+    ip.add_argument("--version", required=True, help="corpus version name, e.g. nasb95")
+    ip.add_argument("--format", choices=["usfm", "tsv"], help="override detection")
+    ip.set_defaults(func=_importer.cmd_import)
     return p
 
 
@@ -41,7 +48,7 @@ def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.version:
+    if args.version and not args.command:
         print(__version__)
         return 0
     if not args.command:
