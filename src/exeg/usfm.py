@@ -9,8 +9,8 @@ _MARKER_LINE = re.compile(r"\\\+?([a-z0-9]+)\s*(.*)")
 # markers whose line content is NOT verse text
 _SKIP = {
     "id", "ide", "usfm", "sts", "rem", "h", "toc1", "toc2", "toc3",
-    "mt", "mt1", "mt2", "mt3", "ms", "ms1", "mr", "s", "s1", "s2", "s3",
-    "r", "d", "sp", "cl", "cp", "cd", "b", "ib", "periph",
+    "mt", "mt1", "mt2", "mt3", "ms", "ms1", "ms2", "ms3", "mr", "s", "s1", "s2", "s3",
+    "r", "d", "sp", "cl", "cp", "cd", "b", "ib", "periph", "qa", "sr", "mte", "lit", "sd",
 }
 _NOTES = re.compile(r"\\[fx]\s.*?\\[fx]\*", re.S)
 _W = re.compile(r"\\\+?w\s+([^|\\]*?)(?:\|[^\\]*?)?\\\+?w\*")

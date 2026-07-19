@@ -37,3 +37,9 @@ def test_bridged_verse_number():
 def test_missing_id_raises():
     with pytest.raises(ValueError):
         parse_usfm("\\c 1\n\\v 1 no id line\n")
+
+def test_rare_heading_markers_do_not_leak():
+    src = "\\id PSA\n\\c 119\n\\v 1 Blessed are those whose way is blameless.\n\\qa ALEPH\n\\v 2 Blessed are those who keep his testimonies.\n"
+    _, verses = parse_usfm(src)
+    assert verses[0].text == "Blessed are those whose way is blameless."
+    assert "ALEPH" not in verses[0].text and "ALEPH" not in verses[1].text
