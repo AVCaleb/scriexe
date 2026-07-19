@@ -49,15 +49,16 @@ exegesis/
 ├── data/
 │   ├── sources/       # raw downloads (gitignored)
 │   ├── corpus/        # normalized plain text, one file per book per version
-│   ├── cache/         # API-fetched ESV/NASB95 passages (gitignored)
-│   └── corpus.sqlite  # index: verse, lemma, Strong's lookup (rebuildable)
+│   └── cache/         # API-fetched ESV/NASB95 passages (gitignored)
 ├── studies/           # generated study files, e.g. 1pe_3.18-22.md
 └── docs/
 ```
 
 The normalized corpus is the source of truth and is deliberately greppable
 plain text (TSV: `book chapter verse [word-level fields] text`), so any agent
-can verify a quotation with ordinary tools. SQLite is a derived index only.
+can verify a quotation with ordinary tools. No database index: the whole
+corpus is < 20 MB, so linear scans are fast enough; add an index only if
+`word`/`search` ever feel slow.
 
 ### Datasets (fetched once by `exeg fetch`)
 
