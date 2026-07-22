@@ -28,6 +28,10 @@ def prepare(target: str, dist: Path, output: Path, version: str) -> None:
         "name": f"scriexe-{target}",
         "version": version,
         "description": f"Native scriexe binary for {target}",
+        "repository": {
+            "type": "git",
+            "url": "https://github.com/AVCaleb/scriexe",
+        },
         "os": [os_name],
         "cpu": [cpu],
         "files": ["dist"],

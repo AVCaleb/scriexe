@@ -75,3 +75,4 @@ def test_release_workflow_packages_both_readmes():
     assert "README.md" in text and "README_ZH.md" in text
     package = (ROOT / "npm" / "scriexe" / "package.json").read_text(encoding="utf-8")
     assert '"README.md"' in package and '"README_ZH.md"' in package
+    assert '"https://github.com/AVCaleb/scriexe"' in package

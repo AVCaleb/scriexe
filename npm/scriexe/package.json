@@ -2,6 +2,10 @@
   "name": "scriexe",
   "version": "0.1.0",
   "description": "Standalone installer and launcher for the exeg terminal Bible-exegesis workspace",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AVCaleb/scriexe"
+  },
   "bin": {
     "scriexe": "bin/scriexe.js"
   },

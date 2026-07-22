@@ -21,4 +21,5 @@ def test_prepare_native_package(tmp_path):
     assert package["name"] == "scriexe-linux-x64"
     assert package["version"] == "1.2.3"
     assert package["os"] == ["linux"] and package["cpu"] == ["x64"]
+    assert package["repository"]["url"] == "https://github.com/AVCaleb/scriexe"
     assert (out / "dist" / "scriexe" / "scriexe").is_file()
