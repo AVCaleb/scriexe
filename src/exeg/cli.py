@@ -80,7 +80,19 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _configure_stdio() -> None:
+    """Keep multilingual CLI output usable on Windows' legacy code pages."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8")
+            except (OSError, ValueError):
+                pass
+
+
 def main(argv=None) -> int:
+    _configure_stdio()
     argv = sys.argv[1:] if argv is None else argv
     parser = build_parser()
     args = parser.parse_args(argv)
