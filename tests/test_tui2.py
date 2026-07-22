@@ -14,11 +14,14 @@ def tmp_notes(tmp_path, monkeypatch):
 
 
 def make_controller():
-    return tui.Controller()
+    c = tui.Controller()
+    c.lang = "en"
+    return c
 
 
 def test_screen_open_uses_short_escape_delay(monkeypatch):
     calls = []
+    monkeypatch.setattr(tui, "_direct_term_name", lambda *_args, **_kwargs: None)
 
     class FakeWindow:
         def keypad(self, enabled):
@@ -36,8 +39,14 @@ def test_screen_open_uses_short_escape_delay(monkeypatch):
     assert calls == [25]
 
 
-def test_screen_open_uses_yellow_text_on_blue_focus_band(monkeypatch):
+@pytest.mark.parametrize("colors, expected", [
+    (1 << 24, (1, 0xFFFFAF, 0x005477)),
+    (256, (1, 229, 24)),
+    (8, (1, tui.curses.COLOR_YELLOW, tui.curses.COLOR_BLUE)),
+])
+def test_screen_open_uses_selected_focus_band_with_fallback(monkeypatch, colors, expected):
     pairs = []
+    monkeypatch.setattr(tui, "_direct_term_name", lambda *_args, **_kwargs: None)
 
     class FakeWindow:
         def keypad(self, enabled):
@@ -52,10 +61,59 @@ def test_screen_open_uses_yellow_text_on_blue_focus_band(monkeypatch):
     monkeypatch.setattr(tui.curses, "start_color", lambda: None)
     monkeypatch.setattr(tui.curses, "use_default_colors", lambda: None)
     monkeypatch.setattr(tui.curses, "init_pair", lambda *args: pairs.append(args))
+    monkeypatch.setattr(tui.curses, "COLORS", colors, raising=False)
 
     tui.Screen().open()
 
-    assert pairs[0] == (1, tui.curses.COLOR_YELLOW, tui.curses.COLOR_BLUE)
+    assert pairs[0] == expected
+
+
+def test_direct_term_selection_requires_truecolor_and_terminfo():
+    available = lambda name: name in {"tmux-direct", "xterm-direct"}
+    assert tui._direct_term_name("tmux-256color", "truecolor", available) == "tmux-direct"
+    assert tui._direct_term_name("xterm-256color", "24bit", available) == "xterm-direct"
+    assert tui._direct_term_name("tmux-256color", "", available) is None
+    assert tui._direct_term_name("screen-256color", "truecolor", available) is None
+    assert tui._direct_term_name("tmux-256color", "truecolor", lambda _name: False) is None
+
+
+def test_wlc_verse_and_word_context_are_marked_for_right_alignment():
+    c = make_controller()
+    gen = next(i for i, book in enumerate(canon.BOOKS) if book.osis == "Gen")
+    c.goto(tui.Node(gen, 1, 1))
+    c.nav_visible = False
+    c.versions = ["wlc"]
+    c._versions_custom = True
+    verse_lines, _ = c.render_content()
+    wlc_lines = [(text, kind) for text, kind in verse_lines if "WLC" in text]
+    assert wlc_lines and all(kind.startswith(tui.RTL_PREFIX) for _text, kind in wlc_lines)
+    c.view = "word"
+    c.word_idx = 1
+    c._enter_word_view()
+    word_lines, _ = c.render_content()
+    original = [(text, kind) for text, kind in word_lines if "WLC" in text]
+    assert original and original[0][1].startswith(tui.RTL_PREFIX)
+
+
+def test_rtl_version_body_wraps_and_right_aligns_each_row():
+    text = tui._version_line("WLC", "אבג דהו זחט יכל")
+    rows, _line_rows = tui._build_rows(
+        [(text, tui.RTL_PREFIX + tui.KIND_NORMAL)], 18, color=True, wrap=True)
+    assert len(rows) >= 2
+    for row, _kind in rows:
+        assert tui._cell_width(row) == 18
+    assert rows[0][0].startswith("  WLC")
+    assert rows[-1][0].endswith("יכל")
+
+
+def test_non_hebrew_translation_keeps_normal_left_aligned_kind():
+    c = make_controller()
+    c.nav_visible = False
+    c.versions = ["asv"]
+    c._versions_custom = True
+    lines, _ = c.render_content()
+    asv = [(text, kind) for text, kind in lines if "ASV" in text]
+    assert asv and all(not kind.startswith(tui.RTL_PREFIX) for _text, kind in asv)
 
 
 def _drill_to_1pet_3_18_word(c, word_idx=7):
@@ -132,6 +190,7 @@ def test_exit_word_view():
 
 def test_command_word_renders_result_view():
     c = make_controller()
+    c.lang = "en"
     msg = c.execute(":word G3958")
     assert c.view == "result"
     assert c.result_items
@@ -140,10 +199,52 @@ def test_command_word_renders_result_view():
 
 def test_command_search_renders_result_view():
     c = make_controller()
+    c.lang = "en"
     msg = c.execute(":search hope")
     assert c.view == "result"
     assert c.result_items
     assert "match" in msg.lower() or "hit" in msg.lower()
+
+
+def test_search_uses_installed_effective_versions_and_labels_results(monkeypatch):
+    c = make_controller()
+    c.versions = ["cuvs", "asv", "missing"]
+    c._versions_custom = True
+    monkeypatch.setattr(corpus, "has_version", lambda version: version != "missing")
+    seen = {}
+
+    def fake_search(pattern, versions, lemma=False):
+        seen["args"] = (pattern, versions, lemma)
+        return [("asv", "Titus", 1, 1, "matching text")]
+
+    monkeypatch.setattr(tui.search, "search_text", fake_search)
+    c.execute(":search faith")
+    lines, _focus = c.render_content()
+    assert seen["args"] == ("faith", ["cuvs", "asv"], False)
+    assert "[ASV]" in lines[2][0]
+
+
+def test_result_selection_follows_cursor_and_enter_opens_selected(monkeypatch):
+    c = make_controller()
+    hits = [("asv", "Titus", 1, 1, "first"),
+            ("cuvs", "1Pet", 3, 18, "second")]
+    monkeypatch.setattr(tui.search, "search_text",
+                        lambda *_args, **_kwargs: hits)
+    monkeypatch.setattr(corpus, "has_version", lambda _version: True)
+    c.execute(":search faith")
+    lines, focus = c.render_content()
+    assert "▶" in lines[2][0] and lines[2][1] == tui.KIND_OCCUR_SEL
+    assert "▶" not in lines[3][0]
+    assert focus == 2
+    tui._handle(None, c, ord("j"), 0, lines, focus, 20)
+    lines, focus = c.render_content()
+    assert "▶" not in lines[2][0]
+    assert "▶" in lines[3][0] and lines[3][1] == tui.KIND_OCCUR_SEL
+    assert focus == 3
+    tui._handle(None, c, 10, 0, lines, focus, 20)
+    assert c.view == "verse"
+    assert c.focus.book().osis == "1Pet"
+    assert (c.focus.chapter, c.focus.verse) == (3, 18)
 
 
 def test_result_cursor_jump_and_exit():
@@ -320,13 +421,82 @@ def test_command_export_message(tmp_notes, tmp_path, monkeypatch):
     monkeypatch.setenv("EXEG_ROOT", str(tmp_path))
     c = make_controller()
     msg = c.execute(":export 1Pet 3:18-18")
+    path = tmp_path / "studies" / "1pet_3.18.md"
     assert "exported" in msg.lower()
-    assert (tmp_path / "studies" / "1pet_3.18.md").exists()
+    assert str(path.resolve()) in msg
+    assert path.exists()
 
 
 # ===========================================================================
 # Phase 4 — find, history, settings
 # ===========================================================================
+
+def test_line_editor_cursor_deletion_and_control_keys():
+    e = tui.LineEditor("ab", [])
+    assert e.cursor == 2
+    e.handle(tui.curses.KEY_LEFT)
+    e.handle("中")
+    assert (e.text, e.cursor) == ("a中b", 2)
+    e.handle(tui.curses.KEY_HOME)
+    e.handle(tui.curses.KEY_DC)
+    assert e.text == "中b"
+    e.handle(tui.curses.KEY_END)
+    e.handle(127)
+    assert e.text == "中"
+    e.handle(1)  # Ctrl-A
+    e.handle("前")
+    e.handle(5)  # Ctrl-E
+    e.handle("后")
+    assert e.text == "前中后"
+    e.cursor = 1
+    e.handle(11)  # Ctrl-K
+    assert e.text == "前"
+    e.handle("中后")
+    e.cursor = 2
+    e.handle(21)  # Ctrl-U
+    assert e.text == "后"
+
+
+def test_line_editor_history_restores_draft_and_collapses_duplicates():
+    history = ["passage Titus 1", "search faith"]
+    e = tui.LineEditor("draft", history)
+    e.handle(tui.curses.KEY_UP)
+    assert e.text == "search faith"
+    e.handle(tui.curses.KEY_UP)
+    assert e.text == "passage Titus 1"
+    e.handle(tui.curses.KEY_DOWN)
+    e.handle(tui.curses.KEY_DOWN)
+    assert e.text == "draft"
+    assert e.handle(10) == "submit"
+    assert history[-1] == "draft"
+    duplicate = tui.LineEditor("draft", history)
+    duplicate.handle(10)
+    assert history.count("draft") == 1
+    assert tui.LineEditor("", history).handle(27) == "cancel"
+
+
+def test_controller_keeps_command_and_find_history_separate():
+    c = make_controller()
+    assert c.command_history == []
+    assert c.find_history == []
+    tui.LineEditor("search faith", c.command_history).handle(10)
+    tui.LineEditor("faith", c.find_history).handle(10)
+    assert c.command_history == ["search faith"]
+    assert c.find_history == ["faith"]
+
+
+def test_command_handler_uses_internal_prompt_without_suspending(monkeypatch):
+    c = make_controller()
+
+    class FakeScreen:
+        def suspend(self):
+            raise AssertionError("command prompt must not suspend curses")
+
+    monkeypatch.setattr(tui, "_prompt_line",
+                        lambda _screen, prefix, history: "scope verse")
+    tui._handle(FakeScreen(), c, ord(":"), 0, [], -1, 20)
+    assert c.scope == "verse"
+
 
 def test_find_returns_hits_and_navigates():
     c = make_controller()
@@ -337,6 +507,53 @@ def test_find_returns_hits_and_navigates():
     assert c.find_idx == 0
     line = c.find_next(1)
     assert isinstance(line, int)
+
+
+def test_find_is_scoped_to_plain_verse_preview():
+    c = make_controller()
+    c.view = "result"
+    c.result_items = [(0, 1, 1)]
+    c.result_lines = [("search history", tui.KIND_HEADER), ("", tui.KIND_NOTE),
+                      ("old match", tui.KIND_OCCUR)]
+    assert c.find("match") == 0
+    assert c.find_pat == "" and c.find_hits == []
+    c.view = "verse"
+    c.nav_visible = True
+    assert c.find("match") == 0
+
+
+def test_active_find_uses_jk_and_enter_or_escape_clears():
+    c = make_controller()
+    c.view = "verse"
+    c.nav_visible = False
+    c.find_pat = "match"
+    c.find_hits = [2, 4]
+    c.find_idx = 0
+    original_focus = c.focus
+    tui._handle(None, c, ord("j"), 0, [], -1, 20)
+    assert c.find_idx == 1 and c.focus == original_focus
+    tui._handle(None, c, ord("k"), 0, [], -1, 20)
+    assert c.find_idx == 0
+    tui._handle(None, c, 10, 0, [], -1, 20)
+    assert c.find_pat == "" and c.find_hits == []
+    assert c.suppress_focus_once is True
+    c.find_pat, c.find_hits, c.find_idx = "again", [3], 0
+    tui._handle(None, c, 27, 0, [], -1, 20)
+    assert c.find_pat == "" and c.find_hits == []
+
+
+def test_opening_help_clears_find_and_has_help_only_status():
+    c = make_controller()
+    c.lang = "en"
+    c.nav_visible = False
+    c.find_pat, c.find_hits, c.find_idx = "old", [8], 0
+    tui._handle(None, c, ord("?"), 0, [], -1, 20)
+    assert c.show_help is True
+    assert c.find_pat == "" and c.find_hits == []
+    status = tui._status(c)
+    assert "HELP" in status
+    assert "NORMAL" not in status
+    assert "Tab" not in status
 
 
 def test_find_empty_clears():
@@ -409,11 +626,62 @@ def test_versions_custom_persists_across_testaments():
 
 def test_help_overlay_renders_and_toggles():
     c = make_controller()
+    c.lang = "en"
     assert c.show_help is False
     c.show_help = True
     lines, _ = c.render_content()
     assert any("help" in t.lower() for t, _ in lines)
     assert any("q or Esc to close" in t for t, _ in lines)
+
+
+@pytest.mark.parametrize("lang, sections", [
+    ("en", ["Navigator", "Reading scopes", "Word study", "Notes",
+            "Find in preview", "Corpus search", "Bookmark", "Settings",
+            "Command reference", "Export"]),
+    ("zh", ["导航器", "阅读范围", "原文词汇研究", "笔记", "当前预览内查找",
+            "语料库搜索", "书签", "设置", "命令参考", "导出"]),
+])
+def test_detailed_help_covers_features_commands_and_export(lang, sections):
+    lines = tui.help_lines(lang)
+    texts = [text for text, _kind in lines]
+    joined = "\n".join(texts)
+    for section in sections:
+        assert section in joined
+    for command in (":passage", ":versions", ":scope", ":word", ":search",
+                    ":export", ":set", ":setup", ":help", ":q"):
+        assert command in joined
+    for example in (":export Titus 1:1-4", "studies/titus_1.1-4.md",
+                    ":export 彼前3:13-16", "studies/1pet_3.13-16.md"):
+        assert example in joined
+    summary = next(i for i, text in enumerate(texts) if "TUI" in text and
+                   ("keys" in text or "快捷键" in text))
+    navigator = next(i for i, text in enumerate(texts)
+                     if text in ("Navigator", "导航器"))
+    assert summary < navigator
+
+
+def test_help_rendering_follows_interface_language():
+    c = make_controller()
+    c.show_help = True
+    c.lang = "zh"
+    lines, _ = c.render_content()
+    assert any("详细帮助" in text for text, _kind in lines)
+    c.lang = "en"
+    lines, _ = c.render_content()
+    assert any("Detailed help" in text for text, _kind in lines)
+
+
+def test_help_keys_scroll_and_close_without_other_actions():
+    c = make_controller()
+    c.show_help = True
+    tui._handle(None, c, ord("j"), 0, [], -1, 20)
+    assert c.help_scroll == 1
+    tui._handle(None, c, ord("k"), 0, [], -1, 20)
+    assert c.help_scroll == 0
+    tui._handle(None, c, 4, 0, [], -1, 20)
+    assert c.help_scroll == 1
+    tui._handle(None, c, ord("q"), 0, [], -1, 20)
+    assert c.show_help is False and c.running is True
 
 
 def test_render_content_while_editing_returns_scripture():
@@ -463,7 +731,7 @@ def test_i18n_tr_returns_en_and_zh():
 
 def test_controller_lang_from_meta(tmp_notes):
     notes.write_meta({"lang": "zh", "translations": ["cuvs"]})
-    c = make_controller()
+    c = tui.Controller()
     assert c.lang == "zh"
     assert c.translations == ["cuvs"]
 

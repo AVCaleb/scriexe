@@ -3,7 +3,9 @@ from exeg import canon, tui
 
 
 def make_controller():
-    return tui.Controller()
+    c = tui.Controller()
+    c.lang = "en"
+    return c
 
 
 # ---- defaults ----

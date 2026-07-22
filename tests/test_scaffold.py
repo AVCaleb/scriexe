@@ -42,21 +42,25 @@ def test_build_structure(corpus_root, monkeypatch):
     assert "> ESV unavailable" in md
     assert "Cross-references · 串珠：" in md
 
-def test_write_and_force(corpus_root):
+def test_write_and_force(corpus_root, tmp_path, monkeypatch):
     seed(corpus_root)
+    output = tmp_path / "user-data" / "studies"
+    monkeypatch.setattr(corpus, "studies_dir", lambda: output)
     ref = parse_ref("1Pet 3:18-19")
     path = scaffold.write(ref)
-    assert path == corpus.root() / "studies" / "1pet_3.18-19.md"
+    assert path == output / "1pet_3.18-19.md"
     assert path.exists()
     with pytest.raises(SystemExit):
         scaffold.write(ref)
     scaffold.write(ref, force=True)
 
-def test_cli(corpus_root, capsys):
+
+def test_cli_reports_absolute_study_path(corpus_root, capsys):
     seed(corpus_root)
     from exeg.cli import main
     assert main(["scaffold", "彼前3:18-19"]) == 0
-    assert "studies/1pet_3.18-19.md" in capsys.readouterr().out
+    expected = corpus.studies_dir() / "1pet_3.18-19.md"
+    assert str(expected.resolve()) in capsys.readouterr().out
 
 def test_ot_scaffold_hebrew_path(corpus_root, monkeypatch):
     monkeypatch.delenv("ESV_API_KEY", raising=False)

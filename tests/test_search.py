@@ -24,6 +24,12 @@ def test_search_text(corpus_root):
     hits = search.search_text("living hope", ["web"])
     assert hits == [("web", "1Pet", 1, 3, "has begotten us again to a living hope")]
 
+def test_search_original_language_surface_text(corpus_root):
+    seed(corpus_root)
+    hits = search.search_text("Χριστ", ["sblgnt"])
+    assert hits == [("sblgnt", "1Pet", 3, 18, "ἔπαθεν Χριστὸς")]
+
+
 def test_search_lemma(corpus_root):
     seed(corpus_root)
     hits = search.search_text("πάσχω", ["sblgnt"], lemma=True)

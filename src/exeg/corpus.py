@@ -49,6 +49,12 @@ def root() -> Path:
     return user_root()
 
 
+def studies_dir() -> Path:
+    """Writable study output, kept outside a source checkout by default."""
+    override = os.environ.get("EXEG_ROOT") or os.environ.get("EXEG_USER_ROOT")
+    return (Path(override) if override else default_user_root()) / "studies"
+
+
 def corpus_dir() -> Path:
     return user_root() / "data" / "corpus"
 

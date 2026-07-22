@@ -113,7 +113,7 @@ def build(ref: Ref, versions: list[str] | None = None, today: str | None = None)
 
 
 def write(ref: Ref, force: bool = False, versions: list[str] | None = None) -> Path:
-    path = corpus.root() / "studies" / f"{ref.slug()}.md"
+    path = corpus.studies_dir() / f"{ref.slug()}.md"
     if path.exists() and not force:
         raise SystemExit(f"{path} exists — use --force to overwrite")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -131,5 +131,5 @@ def cmd_scaffold(args) -> int:
         return 1
     versions = args.versions.split(",") if args.versions else None
     path = write(ref, force=args.force, versions=versions)
-    print(f"wrote {path.relative_to(corpus.root())}")
+    print(f"wrote {path.resolve()}")
     return 0

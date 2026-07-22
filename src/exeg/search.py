@@ -57,9 +57,19 @@ def search_text(pattern, versions, book=None, lemma=False):
                         seen.add((w.chapter, w.verse))
                         hits.append((version, osis, w.chapter, w.verse, w.surface))
             else:
-                for v in corpus.read_verses(version, osis):
-                    if rx.search(v.text):
-                        hits.append((version, osis, v.chapter, v.verse, v.text))
+                if version in corpus.WORD_VERSIONS:
+                    grouped: dict[tuple[int, int], list[str]] = {}
+                    for word in corpus.read_words(version, osis):
+                        grouped.setdefault((word.chapter, word.verse), []).append(
+                            word.surface.replace("/", ""))
+                    verses = ((ch, verse, " ".join(parts))
+                              for (ch, verse), parts in sorted(grouped.items()))
+                else:
+                    verses = ((v.chapter, v.verse, v.text)
+                              for v in corpus.read_verses(version, osis))
+                for chapter, verse, text in verses:
+                    if rx.search(text):
+                        hits.append((version, osis, chapter, verse, text))
     return hits
 
 

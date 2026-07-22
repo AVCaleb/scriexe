@@ -5,6 +5,21 @@ from exeg.refs import parse_ref
 def test_root_uses_env(corpus_root):
     assert corpus.root() == corpus_root
 
+
+def test_studies_dir_uses_platform_user_data_outside_source_checkout(tmp_path, monkeypatch):
+    monkeypatch.delenv("EXEG_ROOT", raising=False)
+    monkeypatch.delenv("EXEG_USER_ROOT", raising=False)
+    user_data = tmp_path / "user-data" / "scriexe"
+    monkeypatch.setattr(corpus, "default_user_root", lambda system=None: user_data)
+    assert corpus.studies_dir() == user_data / "studies"
+
+
+def test_studies_dir_honors_explicit_user_root(tmp_path, monkeypatch):
+    monkeypatch.delenv("EXEG_ROOT", raising=False)
+    monkeypatch.setenv("EXEG_USER_ROOT", str(tmp_path / "override"))
+    assert corpus.studies_dir() == tmp_path / "override" / "studies"
+
+
 def test_verse_roundtrip_and_range(corpus_root):
     vv = [Verse(3, v, f"text {v}") for v in range(16, 23)] + [Verse(4, 1, "next")]
     corpus.write_verses("web", "1Pet", vv)

@@ -12,6 +12,7 @@ is the curses driver.
 import curses
 import os
 import re
+import subprocess
 import sys
 import unicodedata
 from dataclasses import dataclass, field
@@ -21,7 +22,6 @@ from exeg.i18n import tr
 
 ORIG = {"nt": "sblgnt", "ot": "wlc"}
 LOCAL_DEFAULT = ["cuvs", "asv"]
-SEARCH_DEFAULT = ["web", "kjv", "cuvs"]
 
 SCOPES = ("window", "chapter", "verse")
 DEFAULT_BOOK = "1Pet"
@@ -45,6 +45,7 @@ KIND_TOKEN = "token"
 KIND_OCCUR = "occur"
 KIND_OCCUR_SEL = "occur_sel"
 KIND_LABEL = "label"
+RTL_PREFIX = "rtl:"
 
 
 @dataclass
@@ -62,6 +63,70 @@ class Node:
 
     def __hash__(self):
         return hash((self.book_idx, self.chapter, self.verse))
+
+
+@dataclass
+class LineEditor:
+    """Pure one-line editor used by the curses command and find prompts."""
+    text: str = ""
+    history: list[str] = field(default_factory=list)
+    cursor: int = field(init=False)
+    history_pos: int = field(init=False)
+    draft: str = field(init=False)
+
+    def __post_init__(self):
+        self.cursor = len(self.text)
+        self.history_pos = len(self.history)
+        self.draft = self.text
+
+    def _set_text(self, text: str) -> None:
+        self.text = text
+        self.cursor = len(text)
+
+    def handle(self, key) -> str | None:
+        if key in (10, 13, "\n", "\r", curses.KEY_ENTER):
+            if self.text.strip() and (not self.history or self.history[-1] != self.text):
+                self.history.append(self.text)
+            return "submit"
+        if key in (27, 3, "\x1b", "\x03"):
+            return "cancel"
+        if key in (curses.KEY_LEFT,):
+            self.cursor = max(0, self.cursor - 1)
+        elif key in (curses.KEY_RIGHT,):
+            self.cursor = min(len(self.text), self.cursor + 1)
+        elif key in (curses.KEY_HOME, 1, "\x01"):
+            self.cursor = 0
+        elif key in (curses.KEY_END, 5, "\x05"):
+            self.cursor = len(self.text)
+        elif key in (curses.KEY_BACKSPACE, 8, 127, "\b", "\x7f"):
+            if self.cursor:
+                self.text = self.text[:self.cursor - 1] + self.text[self.cursor:]
+                self.cursor -= 1
+        elif key == curses.KEY_DC:
+            if self.cursor < len(self.text):
+                self.text = self.text[:self.cursor] + self.text[self.cursor + 1:]
+        elif key in (21, "\x15"):  # Ctrl-U
+            self.text = self.text[self.cursor:]
+            self.cursor = 0
+        elif key in (11, "\x0b"):  # Ctrl-K
+            self.text = self.text[:self.cursor]
+        elif key == curses.KEY_UP:
+            if self.history and self.history_pos > 0:
+                if self.history_pos == len(self.history):
+                    self.draft = self.text
+                self.history_pos -= 1
+                self._set_text(self.history[self.history_pos])
+        elif key == curses.KEY_DOWN:
+            if self.history_pos < len(self.history) - 1:
+                self.history_pos += 1
+                self._set_text(self.history[self.history_pos])
+            elif self.history_pos == len(self.history) - 1:
+                self.history_pos = len(self.history)
+                self._set_text(self.draft)
+        elif isinstance(key, str) and key.isprintable():
+            self.text = self.text[:self.cursor] + key + self.text[self.cursor:]
+            self.cursor += len(key)
+        return None
 
 
 def _local_default(book: canon.Book) -> list[str]:
@@ -164,6 +229,9 @@ class Controller:
         self.find_hits: list[int] = []
         self.find_idx: int = -1
         self.find_target_line: int | None = None
+        self.suppress_focus_once = False
+        self.command_history: list[str] = []
+        self.find_history: list[str] = []
 
         # settings
         self.highlight = "auto"
@@ -248,6 +316,7 @@ class Controller:
 
     def goto(self, node: Node, view="verse", word_idx=None):
         """Change focus (no history — `b` returns to the bookmark, set with `p`)."""
+        self.clear_find()
         self._set_focus_state(node, view, word_idx)
 
     def set_bookmark(self):
@@ -268,6 +337,7 @@ class Controller:
     # ---- settings page -----------------------------------------------------
 
     def open_settings(self):
+        self.clear_find()
         self.view = "settings"
         self.nav_visible = False
         self.settings_cursor = 0
@@ -555,15 +625,25 @@ class Controller:
             # scripture stays on top; the editor is drawn as a bottom pane
             return self._render_verse()
         if self.view == "result":
-            return list(self.result_lines), self._result_focus_line()
+            return self._render_results()
         if self.view == "settings":
             return self.render_settings()
         if self.view == "word":
             return self._render_word()
         return self._render_verse()
 
+    def _render_results(self) -> tuple[list[tuple[str, str]], int]:
+        if not self.result_items:
+            return list(self.result_lines), -1
+        out = list(self.result_lines[:2])
+        for i, (text, _kind) in enumerate(self.result_lines[2:]):
+            selected = i == self.result_cursor
+            out.append((f" {'▶' if selected else ' '} {text}",
+                        KIND_OCCUR_SEL if selected else KIND_OCCUR))
+        return out, 2 + self.result_cursor
+
     def _result_focus_line(self) -> int:
-        return 1 + self.result_cursor if self.result_items else -1
+        return 2 + self.result_cursor if self.result_items else -1
 
     def _render_verse(self) -> tuple[list[tuple[str, str]], int]:
         n = self.shown()
@@ -595,8 +675,11 @@ class Controller:
                 label = display.LABELS.get(version, version.upper())
                 text = texts[version].get((ch, v))
                 body = text if text else f"[not in {label}]"
-                lines.append((_version_line(label, body), KIND_FOCUS if is_focus else
-                              (KIND_DIM if self.scope == "window" else KIND_NORMAL)))
+                kind = (KIND_FOCUS if is_focus else
+                        (KIND_DIM if self.scope == "window" else KIND_NORMAL))
+                if version == "wlc":
+                    kind = RTL_PREFIX + kind
+                lines.append((_version_line(label, body), kind))
         if (self.scope == "verse" and focus_line != -1 and not self.nav_visible
                 and not self.editing):
             ntext = notes.read_verse(ref.book.osis, n.chapter, n.verse)
@@ -627,8 +710,10 @@ class Controller:
         words = corpus.get_words(vref, ORIG["nt" if b.nt else "ot"])
         toks = [f"[{_surface(w)}]" if w.idx == widx else _surface(w) for w in words]
         if toks:
-            label = display.LABELS.get(ORIG["nt" if b.nt else "ot"], "ORIG")
-            lines.append((_version_line(label, " ".join(toks)), KIND_TOKEN))
+            original = ORIG["nt" if b.nt else "ot"]
+            label = display.LABELS.get(original, "ORIG")
+            kind = RTL_PREFIX + KIND_TOKEN if original == "wlc" else KIND_TOKEN
+            lines.append((_version_line(label, " ".join(toks)), kind))
         vers = self.effective_versions()
         texts, gnotes = _gather(vref, vers)
         for note in gnotes:
@@ -680,8 +765,7 @@ class Controller:
     def _render_help(self) -> tuple[list[tuple[str, str]], int]:
         lines: list[tuple[str, str]] = [
             (tr(self.lang, "help_title"), KIND_HEADER), ("", KIND_NORMAL)]
-        for ln in HELP_TEXT.splitlines():
-            lines.append((ln, KIND_NORMAL))
+        lines.extend(help_lines(self.lang))
         lines.append(("", KIND_NORMAL))
         lines.append(("────────────────────────────────────────────────────────", KIND_FOCUS))
         return lines, -1
@@ -794,6 +878,7 @@ class Controller:
         self.nav_col = 0
 
     def toggle_nav(self):
+        self.clear_find()
         if self.nav_visible:
             self.exit_nav()
         else:
@@ -878,7 +963,21 @@ class Controller:
 
     # ---- search-within-preview ---------------------------------------------
 
+    def find_allowed(self) -> bool:
+        return (not self.intro and not self.show_help and not self.editing
+                and not self.nav_visible and self.view == "verse")
+
+    def clear_find(self, suppress_focus: bool = False) -> None:
+        self.find_pat = ""
+        self.find_hits = []
+        self.find_idx = -1
+        self.find_target_line = None
+        self.suppress_focus_once = suppress_focus
+
     def find(self, pattern: str) -> int:
+        if not self.find_allowed():
+            self.clear_find()
+            return 0
         self.find_pat = pattern
         self.find_idx = -1
         if not pattern:
@@ -968,6 +1067,7 @@ class Controller:
             line = line[1:].strip()
         if not line:
             return ""
+        self.clear_find()
         if line in ("q", "quit", "exit"):
             self.running = False
             return ""
@@ -1095,17 +1195,18 @@ class Controller:
 
     def _format_word_results(self, r: dict) -> list[tuple[str, str]]:
         out: list[tuple[str, str]] = [(self.result_title, KIND_HEADER), ("", KIND_NOTE)]
-        for i, (ver, osis, ch, v, surface, morph) in enumerate(r.get("occurrences", [])):
-            mark = "▶" if i == 0 else " "
-            out.append((f" {mark} {osis} {ch}:{v}  {surface}  ({search.greek_morph_label(morph)})",
-                        KIND_OCCUR_SEL if i == 0 else KIND_OCCUR))
+        for ver, osis, ch, v, surface, morph in r.get("occurrences", []):
+            out.append((f"[{ver.upper()}] {osis} {ch}:{v}  {surface}  "
+                        f"({search.greek_morph_label(morph)})", KIND_OCCUR))
         return out
 
     def _cmd_search(self, arg: str) -> str:
         if not arg:
             return "usage: :search <pattern>"
+        versions = [version for version in self.effective_versions()
+                    if corpus.has_version(version)]
         try:
-            hits = search.search_text(arg, SEARCH_DEFAULT, lemma=False)
+            hits = search.search_text(arg, versions, lemma=False)
         except re.error as e:
             return f"bad pattern: {e}"
         if not hits:
@@ -1113,10 +1214,9 @@ class Controller:
         self.result_title = f"search: {arg} — {len(hits)} hits"
         self.result_items = [(_osis_index(o[1]), o[2], o[3]) for o in hits]
         self.result_lines = [(self.result_title, KIND_HEADER), ("", KIND_NOTE)]
-        for i, (ver, osis, ch, v, text) in enumerate(hits):
-            mark = "▶" if i == 0 else " "
-            self.result_lines.append((f" {mark} {osis} {ch}:{v}  {text}",
-                                     KIND_OCCUR_SEL if i == 0 else KIND_OCCUR))
+        for ver, osis, ch, v, text in hits:
+            self.result_lines.append((f"[{ver.upper()}] {osis} {ch}:{v}  {text}",
+                                     KIND_OCCUR))
         self.result_cursor = 0
         self.view = "result"
         self.nav_visible = False
@@ -1130,43 +1230,375 @@ class Controller:
         except (refs.BadRef, canon.UnknownBook) as e:
             return tr(self.lang, "bad_ref", e=str(e))
         body = notes.export_ref(ref, self.effective_versions())
-        path = corpus.root() / "studies" / f"{ref.slug()}.md"
+        path = corpus.studies_dir() / f"{ref.slug()}.md"
         if path.exists():
-            path = corpus.root() / "studies" / f"{ref.slug()}.notes.md"
+            path = corpus.studies_dir() / f"{ref.slug()}.notes.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body, encoding="utf-8")
-        return tr(self.lang, "exported", p=str(path.relative_to(corpus.root())))
+        return tr(self.lang, "exported", p=str(path.resolve()))
 
 
-HELP_TEXT = """\
+HELP_MANUAL = {
+    "en": """\
 exeg TUI — keys
  NAV   Tab toggle nav · j/k move · l drill · h up · Enter commit · Esc exit
  VERSE j/k next/prev verse · z scope · +/- window · b back · p bookmark
  WORD  (in word view) j/k select occurrence · Enter jump · Esc back
  NOTES i edit note (Esc save) · :set editor popup for IME-safe input
- FIND  / search text · n/N next/prev
- CMDS  :passage <ref> · :versions <list> · :scope w|c|v
-       :word <q> · :search <pat> · :export <ref> · :set … · :help · :q
-"""
+ FIND  / find in verse preview · j/k next/prev · Enter accept · Esc clear
+ CMDS  :passage <ref> · :versions <list> · :scope window|chapter|verse
+       :word <q> · :search <regex> · :export <ref> · :set … · :help · :q
+
+# Detailed help
+This manual describes what each mode and command changes. Scroll with j/k, the arrow keys, Enter, Ctrl-D, or Ctrl-U. Press q or Esc to close Help.
+
+# Navigator
+Press Tab to open the four-column navigator: Books, Chapters, Verses, and Words. Moving a selection updates the preview immediately but does not change the committed reading position until you press Enter.
+$ j / k or Up / Down     move within the active column
+$ l / Right              drill into the next column
+$ h / Left               return to the previous column
+$ g / G                  jump to the first / last item in the active column
+$ Enter                  commit the selected verse or word
+$ Esc or q               close NAV and return to the committed position
+The Words column requires the optional SBLGNT or WLC original-language data; Strong's data enriches its lexical details. Install the study pack from onboarding or Settings if the column is empty.
+
+# Reading scopes
+The scope controls how much text surrounds the focused verse. Press z to cycle through the three modes.
+$ window   show verses before and after the focus; + and - change the radius
+$ chapter  show the complete chapter
+$ verse    show only the focused verse and its attached note area
+In reading mode, j/k moves the focused verse. g/G jumps to the first/last verse in the current study set. Ctrl-D and Ctrl-U scroll by half a screen without changing the focused verse.
+WLC Hebrew scripture body rows align to the pane's right edge; version labels and all other translations remain left-aligned.
+
+# Word study
+From NAV, drill into Words and press Enter on a Greek or Hebrew form. The word view shows the selected form in context, its lemma/Strong's information when available, morphology, and occurrences in the installed corpus.
+$ j / k       select an occurrence
+$ Enter       open the selected occurrence in its verse
+$ Esc or h    return to the verse view
+You can also open a result list directly with :word. Original-language and Strong's datasets must be installed first.
+
+# Notes
+Close NAV, focus a verse, and press i to edit its note. In word view, i edits a note attached to that word occurrence instead.
+$ Esc          save and leave the inline editor
+$ Ctrl-C       discard this editing session
+$ Arrow keys   move the inline editor cursor
+Notes are stored as local Markdown files. A pencil mark identifies verses that already have notes.
+For IME-heavy Chinese input, use :set editor popup. The popup editor accepts normal terminal input; press Ctrl-D to finish or Ctrl-C to cancel. A blank submission keeps the existing note.
+
+# Find in preview
+Press / in ordinary verse view with NAV closed to search the currently rendered translations and visible notes. This is a literal, case-insensitive search rather than a regular expression. It never searches old Results, Help, Settings, Word, or NAV content.
+$ j / Down    move to the next match
+$ k / Up      move to the previous match
+$ Enter       accept the current viewport and clear highlighting
+$ Esc         clear find and resume normal verse navigation
+Submitting an empty pattern also clears find.
+
+# Corpus search
+:search performs a regular-expression search across the currently enabled versions that are installed locally. Every row identifies its source, such as [ASV] or [CUVS]. This is broader than /, which searches only the current verse preview.
+$ :search hope
+$ :search faith|hope
+In Results, use j/k to move the visible selection, Enter to open that verse, and Esc or h to return to the pre-search verse.
+
+# Bookmark
+Press p in verse view to save the current location. There is one bookmark: pressing p again replaces it. Press b to return to it; returning also closes NAV. The title shows bm:<reference> while a bookmark exists.
+A bookmark is useful before following a word occurrence or moving to another passage. It lasts for the current application session.
+
+# Settings
+Press o in verse view, or run :set with no argument, to open Settings. Use j/k to move, Enter or Space to toggle, and Esc to return.
+Settings controls interface language, visible translations, API keys, note markers, optional study data, and restoration of defaults. Translation and display choices are persisted locally.
+The “Download all optional study data” action installs SBLGNT, WLC, Strong's, WEB, KJV, and Vulgate. Completed datasets are kept if a download is interrupted; run the action again to retry.
+
+# Command reference
+From NAV, reading, Word, Results, or Settings, press : to enter a command. The leading colon shown below is optional after the prompt has opened. The prompt stays inside the TUI and keeps a session history.
+$ Up / Down             previous / next command
+$ Left / Right          move the cursor
+$ Home / Ctrl-A         move to the start
+$ End / Ctrl-E          move to the end
+$ Backspace / Delete    delete before / at the cursor
+$ Ctrl-U / Ctrl-K       delete start-to-cursor / cursor-to-end
+$ Enter                 execute
+$ Esc / Ctrl-C          cancel
+
+$ :passage <ref>
+Create a temporary study set and jump to its first verse. English and Chinese references are accepted. Running :passage with no reference clears the set and returns navigation to the current chapter.
+$ Example: :passage Titus 1:1-4
+$ Example: :passage 彼前3:13-16
+
+$ :versions <comma-list>
+Use an explicit version list for the current session. Version ids include cuvs, asv, web, kjv, vulgate, sblgnt, wlc, esv, and nasb95. This command overrides automatic original-language selection but does not replace the persisted Settings list.
+$ Example: :versions cuvs,asv
+Running :versions without a list reports the effective versions.
+
+$ :scope window|chapter|verse
+Set the reading scope directly instead of cycling with z. The scope is session state.
+$ Example: :scope chapter
+
+$ :word <Strong's number or lemma>
+Search installed original-language data and open an occurrence list.
+$ Example: :word G3958
+If no study data or matching occurrence exists, the status line reports that no occurrence was found.
+
+$ :search <regex>
+Search the currently enabled, locally installed versions with a regular expression and open the result list. Use / instead when you only want to find literal text in the current preview.
+$ Example: :search hope
+
+# Export
+:export compiles a selected passage, the currently effective translations, and attached book/chapter/verse/word notes into Markdown. After every export, the status line reports the complete absolute file path.
+$ :export Titus 1:1-4
+$ → studies/titus_1.1-4.md
+$ :export 彼前3:13-16
+$ → studies/1pet_3.13-16.md
+$ Current studies directory: {studies_dir}
+Packaged defaults are ~/Library/Application Support/scriexe/studies on macOS, ${XDG_DATA_HOME:-~/.local/share}/scriexe/studies on Linux, and %LOCALAPPDATA%\\scriexe\\studies on Windows.
+The first export uses <slug>.md. If that path already exists, the next export uses <slug>.notes.md; later exports of the same reference replace that .notes.md file. Export does not modify the original note files.
+
+# More commands and settings
+$ :set
+Open the Settings page.
+$ :set highlight auto|color|minimal
+Choose automatic color detection, forced color, or minimal/no-color emphasis. Persisted.
+$ :set editor inline|popup
+Choose the inline note pane or IME-safe popup editor. Persisted.
+$ :set window N
+Set the window radius from 1 to 40 verses. Values outside that range are clamped. Persisted.
+$ :set notemark <char>
+Choose the marker shown beside verses with notes. Up to two characters are stored. Persisted.
+$ :setup
+Reopen first-run setup for language, translations, downloads, and optional API keys.
+$ :help
+Open this Help page and reset it to the top.
+$ :q
+Quit scriexe from the command prompt. Unlike the plain q key, this command does not act as contextual Back.
+
+# Leaving modes
+Esc normally returns one level: it closes NAV, Word, Results, Settings, or Help; in active preview find it clears find; in the inline note editor it saves first. The plain q key closes NAV, Settings, Word, Results, or Help, but exits scriexe from normal reading mode.
+""",
+    "zh": """\
+exeg TUI — 快捷键
+ 导航   Tab 开关导航 · j/k 移动 · l 下钻 · h 返回 · Enter 选定 · Esc 退出
+ 经文   j/k 上/下一节 · z 阅读范围 · +/- 窗口 · b 返回书签 · p 设置书签
+ 词汇   （词汇视图）j/k 选择出现位置 · Enter 跳转 · Esc 返回
+ 笔记   i 编辑笔记（Esc 保存）· :set editor popup 启用输入法友好编辑
+ 查找   / 查找经文预览 · j/k 下一个/上一个 · Enter 确认 · Esc 清除
+ 命令   :passage <经文> · :versions <列表> · :scope window|chapter|verse
+        :word <查询> · :search <正则> · :export <经文> · :set … · :help · :q
+
+# 详细帮助
+本手册说明每种模式和命令实际会改变什么。使用 j/k、方向键、Enter、Ctrl-D 或 Ctrl-U 滚动；按 q 或 Esc 关闭帮助。
+
+# 导航器
+按 Tab 打开四列导航器：书卷、章节、经节和词汇。移动选项会立即更新右侧预览，但只有按 Enter 后才会改变正式阅读位置。
+$ j / k 或 上 / 下方向键    在当前列移动
+$ l / 右方向键             进入下一列
+$ h / 左方向键             返回上一列
+$ g / G                    跳到当前列第一项 / 最后一项
+$ Enter                    打开所选经节或词汇
+$ Esc 或 q                 关闭导航，回到已选定的阅读位置
+词汇列需要可选的 SBLGNT 或 WLC 原文数据；Strong's 数据会补充词汇资料。如果该列为空，请在首次设置或设置页下载研经资料。
+
+# 阅读范围
+阅读范围决定焦点经节周围显示多少上下文。按 z 在三种模式之间循环。
+$ window   显示焦点前后的经节；使用 + 和 - 调整范围
+$ chapter  显示完整章节
+$ verse    只显示焦点经节及其笔记区域
+在经文模式中，j/k 移动焦点经节；g/G 跳到当前研读选段的第一节/最后一节；Ctrl-D 与 Ctrl-U 滚动半屏但不改变焦点。
+WLC 希伯来文经文正文的每一行都会对齐窗格右边缘；译本标签和其他译本仍保持左对齐。
+
+# 原文词汇研究
+在导航器中进入“词汇”列，对希腊文或希伯来文词形按 Enter。词汇视图会显示该词在经文中的位置、lemma、Strong's 信息、词形分析，以及已安装语料中的出现位置。
+$ j / k       选择一个出现位置
+$ Enter       打开该出现位置所在的经节
+$ Esc 或 h    返回经文视图
+也可以使用 :word 直接打开查询结果。此功能需要先安装原文与 Strong's 数据。
+
+# 笔记
+关闭导航器，把焦点放在一节经文上，然后按 i 编辑该节笔记。在词汇视图按 i，则编辑绑定到该词汇出现位置的笔记。
+$ Esc          保存并退出内嵌编辑器
+$ Ctrl-C       放弃本次编辑
+$ 方向键       移动内嵌编辑器光标
+笔记以本地 Markdown 文件保存。已有笔记的经节旁会显示铅笔标记。
+中文输入法较多时，可使用 :set editor popup。弹出编辑器使用普通终端输入；Ctrl-D 完成，Ctrl-C 取消；空白提交会保留原笔记。
+
+# 当前预览内查找
+在普通经文视图且导航器关闭时，按 / 查找当前已渲染的译本和可见笔记。这是忽略大小写的字面查找，不是正则表达式；它绝不会搜索旧结果、帮助、设置、词汇或导航内容。
+$ j / 下方向键    下一个匹配
+$ k / 上方向键    上一个匹配
+$ Enter            接受当前滚动位置并清除高亮
+$ Esc              清除查找，恢复普通经节导航
+提交空内容也会清除查找。
+
+# 语料库搜索
+:search 使用正则表达式搜索当前已启用且安装在本地的译本。每条结果都会标明来源，例如 [ASV] 或 [CUVS]；它比只查找当前经文预览的 / 范围更广。
+$ :search hope
+$ :search faith|hope
+在结果中使用 j/k 移动可见选项，Enter 打开所选经节，Esc 或 h 返回搜索前的经节。
+
+# 书签
+在经文视图按 p 保存当前位置。系统只有一个书签，再次按 p 会替换原书签。按 b 返回书签，同时关闭导航器。书签存在时，标题栏会显示 bm:<经文位置>。
+在跟随词汇出现位置或跳到另一段经文之前设置书签，可以快速回到原处。书签只保留到本次程序退出。
+
+# 设置
+在经文视图按 o，或输入不带参数的 :set，打开设置。使用 j/k 移动，Enter 或空格切换，Esc 返回。
+设置页管理界面语言、可见译本、API Key、笔记标记、可选研经资料和恢复默认值。译本与显示选项会保存到本地。
+“下载全部可选研经数据”会安装 SBLGNT、WLC、Strong's、WEB、KJV 和 Vulgate。下载中断时已经完成的数据会保留；再次执行即可重试。
+
+# 命令参考
+在导航、经文、词汇、结果或设置模式中，按 : 打开命令输入。输入框打开后，下面示例中的开头冒号可以省略。输入框保留在 TUI 内，并记录本次会话的历史命令。
+$ 上 / 下方向键          上一条 / 下一条命令
+$ 左 / 右方向键          移动光标
+$ Home / Ctrl-A          跳到行首
+$ End / Ctrl-E           跳到行尾
+$ Backspace / Delete     删除光标前 / 光标处字符
+$ Ctrl-U / Ctrl-K        删除行首至光标 / 光标至行尾
+$ Enter                  执行
+$ Esc / Ctrl-C           取消
+
+$ :passage <经文范围>
+建立临时研读选段，并跳到其中第一节。支持英文或中文经文格式。不带参数执行 :passage 会清除选段，并恢复当前章节导航。
+$ 示例：:passage Titus 1:1-4
+$ 示例：:passage 彼前3:13-16
+
+$ :versions <逗号分隔列表>
+在当前会话中明确指定译本。可用 id 包括 cuvs、asv、web、kjv、vulgate、sblgnt、wlc、esv 和 nasb95。该命令会覆盖原文自动选择，但不会替换设置页中持久保存的译本列表。
+$ 示例：:versions cuvs,asv
+不带列表执行 :versions 会显示当前实际使用的译本。
+
+$ :scope window|chapter|verse
+直接设置阅读范围，无需按 z 循环。该选择属于当前会话状态。
+$ 示例：:scope chapter
+
+$ :word <Strong's 编号或 lemma>
+查询已安装的原文资料并打开出现位置列表。
+$ 示例：:word G3958
+如果尚未安装研经资料或没有匹配项，状态栏会提示未找到出现位置。
+
+$ :search <正则表达式>
+使用正则表达式搜索当前已启用且安装在本地的译本，并打开结果列表。如果只想查找当前预览中的字面文字，请使用 /。
+$ 示例：:search hope
+
+# 导出
+:export 会把所选经文、当前实际使用的译本，以及关联的书卷/章节/经节/词汇笔记编译为 Markdown。每次导出后，状态栏都会显示文件的完整绝对路径。
+$ :export Titus 1:1-4
+$ → studies/titus_1.1-4.md
+$ :export 彼前3:13-16
+$ → studies/1pet_3.13-16.md
+$ 当前 studies 目录：{studies_dir}
+安装版默认位置：macOS 为 ~/Library/Application Support/scriexe/studies；Linux 为 ${XDG_DATA_HOME:-~/.local/share}/scriexe/studies；Windows 为 %LOCALAPPDATA%\\scriexe\\studies。
+首次导出使用 <slug>.md；如果该路径已存在，下一次使用 <slug>.notes.md；之后再次导出同一范围会覆盖该 .notes.md 文件。导出不会修改原始笔记文件。
+
+# 其他命令与设置
+$ :set
+打开设置页。
+$ :set highlight auto|color|minimal
+选择自动检测颜色、强制彩色或最简/无彩色强调。会持久保存。
+$ :set editor inline|popup
+选择内嵌笔记区或输入法友好的弹出编辑器。会持久保存。
+$ :set window N
+设置 window 模式前后范围，允许 1 至 40；超出范围会自动限制。会持久保存。
+$ :set notemark <字符>
+设置有笔记经节旁的标记，最多保存两个字符。会持久保存。
+$ :setup
+重新打开首次设置，调整语言、译本、下载资料和可选 API Key。
+$ :help
+打开本帮助页，并回到顶部。
+$ :q
+从命令输入框退出 scriexe。与不带冒号的 q 键不同，这条命令不会按上下文执行“返回”。
+
+# 退出各模式
+Esc 通常返回上一层：关闭导航、词汇、结果、设置或帮助；在预览查找中清除查找；在内嵌笔记编辑器中先保存。不带冒号的 q 会关闭导航、设置、词汇、结果或帮助，但在普通经文模式中退出 scriexe。
+""",
+}
+
+
+def help_lines(lang: str) -> list[tuple[str, str]]:
+    """Return localized, styled lines for the scrollable Help overlay."""
+    raw = HELP_MANUAL.get(lang, HELP_MANUAL["en"])
+    raw = raw.replace("{studies_dir}", str(corpus.studies_dir().resolve()))
+    out: list[tuple[str, str]] = []
+    for i, line in enumerate(raw.splitlines()):
+        if line.startswith("# "):
+            out.append((line[2:], KIND_COLHDR))
+        elif line.startswith("$ "):
+            out.append(("  " + line[2:], KIND_LABEL))
+        elif not line:
+            out.append(("", KIND_NORMAL))
+        else:
+            out.append((line, KIND_HEADER if i == 0 else KIND_NORMAL))
+    return out
 
 
 # --------------------------------------------------------------------------- #
 # curses driver
 # --------------------------------------------------------------------------- #
 
+def _terminfo_available(name: str) -> bool:
+    try:
+        return subprocess.run(["infocmp", name], stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, check=False).returncode == 0
+    except OSError:
+        return False
+
+
+def _direct_term_name(term: str, colorterm: str, available=_terminfo_available) -> str | None:
+    if colorterm.lower() not in ("truecolor", "24bit"):
+        return None
+    candidate = {"tmux-256color": "tmux-direct",
+                 "xterm-256color": "xterm-direct"}.get(term)
+    return candidate if candidate and available(candidate) else None
+
+
+def _focus_pair_colors() -> tuple[int, int]:
+    colors = getattr(curses, "COLORS", 0)
+    if colors >= 1 << 24:
+        return 0xFFFFAF, 0x005477
+    if colors >= 256:
+        return 229, 24
+    return curses.COLOR_YELLOW, curses.COLOR_BLUE
+
+
 class Screen:
     def __init__(self):
         self.stdscr = None
         self.has_color = False
+        self._term_prepared = False
+        self._original_term: str | None = None
+        self._term_changed = False
+
+    def _prepare_term(self):
+        if self._term_prepared:
+            return
+        self._term_prepared = True
+        self._original_term = os.environ.get("TERM")
+        direct = _direct_term_name(self._original_term or "",
+                                   os.environ.get("COLORTERM", ""))
+        if direct:
+            os.environ["TERM"] = direct
+            self._term_changed = True
+
+    def _restore_term_env(self):
+        if not self._term_changed:
+            return
+        if self._original_term is None:
+            os.environ.pop("TERM", None)
+        else:
+            os.environ["TERM"] = self._original_term
+        self._term_changed = False
 
     def open(self):
+        self._prepare_term()
         # ncurses otherwise waits about one second to distinguish a standalone
         # Escape press from the start of an arrow/function-key sequence.
         try:
             curses.set_escdelay(25)
         except (AttributeError, curses.error):
             pass
-        self.stdscr = curses.initscr()
+        try:
+            self.stdscr = curses.initscr()
+        except Exception:
+            if not self._term_changed:
+                raise
+            self._restore_term_env()
+            self.stdscr = curses.initscr()
         curses.noecho()
         curses.cbreak()
         self.stdscr.keypad(True)
@@ -1187,7 +1619,8 @@ class Screen:
                     curses.use_default_colors()
                 except curses.error:
                     pass
-                curses.init_pair(1, curses.COLOR_YELLOW, curses.COLOR_BLUE)
+                focus_fg, focus_bg = _focus_pair_colors()
+                curses.init_pair(1, focus_fg, focus_bg)
                 curses.init_pair(2, curses.COLOR_CYAN, -1)
                 curses.init_pair(3, curses.COLOR_YELLOW, -1)
                 curses.init_pair(4, curses.COLOR_GREEN, -1)
@@ -1217,6 +1650,8 @@ class Screen:
             curses.endwin()
         except Exception:
             pass
+        finally:
+            self._restore_term_env()
 
 
 def _color_on(c: Controller, screen: Screen) -> bool:
@@ -1228,6 +1663,8 @@ def _color_on(c: Controller, screen: Screen) -> bool:
 
 
 def _attr(kind: str, color: bool) -> int:
+    if kind.startswith(RTL_PREFIX):
+        kind = kind[len(RTL_PREFIX):]
     if not color:
         if kind in (KIND_FOCUS, KIND_TITLE, KIND_TOKEN, KIND_OCCUR_SEL):
             return curses.A_BOLD
@@ -1258,6 +1695,8 @@ def _attr(kind: str, color: bool) -> int:
 
 
 def _marker(kind: str) -> str:
+    if kind.startswith(RTL_PREFIX):
+        kind = kind[len(RTL_PREFIX):]
     return "▶ " if kind == KIND_FOCUS else "  "
 
 
@@ -1315,7 +1754,9 @@ def run(controller: Controller | None = None) -> int:
                 _edit_popup(screen, controller)
                 continue
             lines, focus_line = controller.render_content()
-            if controller.find_hits and controller.find_idx >= 0:
+            find_active = (controller.find_allowed() and controller.find_hits
+                           and controller.find_idx >= 0)
+            if find_active:
                 lines = _apply_find(lines, controller)
             screen.stdscr.erase()
             h, w = screen.stdscr.getmaxyx()
@@ -1346,8 +1787,12 @@ def run(controller: Controller | None = None) -> int:
                 scroll = _draw_lines(screen, lines, top, body_h, nav_w, w,
                                      scroll, color, focus_line, wrap=True)
             else:
-                scroll = _draw_pane(screen, controller, lines, focus_line, top,
+                pane_focus = (controller.find_hits[controller.find_idx]
+                              if find_active else
+                              (-1 if controller.suppress_focus_once else focus_line))
+                scroll = _draw_pane(screen, controller, lines, pane_focus, top,
                                     body_h, 0, w, scroll, color)
+                controller.suppress_focus_once = False
             _put(screen.stdscr, h - 1, 0, _status(controller), _attr(KIND_STATUS, color), w)
             if controller.editing and not controller.show_help:
                 _position_editor_cursor(screen, controller, top, verse_h, w)
@@ -1474,6 +1919,9 @@ def _title(c: Controller) -> str:
 def _status(c: Controller) -> str:
     if c.intro:
         return " first-run setup · j/k move · Enter select · Begin to start "
+    if c.show_help:
+        return (" HELP · j/k/↑/↓ scroll · q/Esc close " if c.lang == "en" else
+                " 帮助 · j/k/↑/↓ 滚动 · q/Esc 关闭 ")
     if c.editing:
         return tr(c.lang, "insert_status")
     mode = "NAV" if c.nav_visible else ("WORD" if c.view == "word" else
@@ -1592,6 +2040,22 @@ def _wrap_one(text, width):
     return _wrap_plain(text, width)
 
 
+def _wrap_rtl_version(text: str, width: int) -> list[str]:
+    """Keep the version label left while aligning Hebrew body rows right."""
+    width = max(1, width)
+    match = re.match(r"^(  \S+ {2,})(\S.*)$", text)
+    if match:
+        prefix, body = match.groups()
+        prefix_width = _cell_width(prefix)
+        if prefix_width < width:
+            body_width = width - prefix_width
+            chunks = _wrap_plain(body, body_width)
+            return [prefix + " " * max(0, body_width - _cell_width(chunk)) + chunk
+                    for chunk in chunks]
+    chunks = _wrap_plain(text, width)
+    return [" " * max(0, width - _cell_width(chunk)) + chunk for chunk in chunks]
+
+
 def _build_rows(lines, avail, color, wrap=True):
     """Turn logical lines into display rows, word-wrapping each to `avail`.
     Returns (rows, line_row) where line_row[i] is the starting row of line i."""
@@ -1599,9 +2063,13 @@ def _build_rows(lines, avail, color, wrap=True):
     line_row = []
     for text, kind in lines:
         line_row.append(len(rows))
-        marker = _marker(kind) if (not color and kind == KIND_FOCUS) else ""
-        if wrap and _cell_width(text) + _cell_width(marker) > avail:
-            chunks = _wrap_one(text, max(4, avail - _cell_width(marker)))
+        base_kind = kind[len(RTL_PREFIX):] if kind.startswith(RTL_PREFIX) else kind
+        marker = _marker(kind) if (not color and base_kind == KIND_FOCUS) else ""
+        content_width = max(1, avail - _cell_width(marker))
+        if kind.startswith(RTL_PREFIX) and wrap:
+            chunks = _wrap_rtl_version(text, content_width)
+        elif wrap and _cell_width(text) + _cell_width(marker) > avail:
+            chunks = _wrap_one(text, max(4, content_width))
         else:
             chunks = [text]
         for ci, ch in enumerate(chunks):
@@ -1757,6 +2225,45 @@ def _edit_popup(screen, c: Controller):
         c._popup = False
 
 
+def _prompt_line(screen: Screen, prefix: str, history: list[str]) -> str | None:
+    """Edit one line on the status row without leaving curses."""
+    editor = LineEditor("", history)
+    win = screen.stdscr
+    try:
+        curses.curs_set(1)
+    except curses.error:
+        pass
+    while True:
+        h, w = win.getmaxyx()
+        start = 0
+        while (start < editor.cursor and
+               _cell_width(prefix + ("…" if start else "")
+                           + editor.text[start:editor.cursor]) >= max(1, w - 1)):
+            start += 1
+        lead = prefix + ("…" if start else "")
+        visible = lead + editor.text[start:]
+        try:
+            win.move(h - 1, 0)
+            win.clrtoeol()
+        except curses.error:
+            pass
+        _put(win, h - 1, 0, visible, _attr(KIND_STATUS, screen.has_color), w)
+        cursor_x = min(max(0, w - 2), _cell_width(lead + editor.text[start:editor.cursor]))
+        try:
+            win.move(h - 1, cursor_x)
+            win.refresh()
+            key = win.get_wch()
+        except KeyboardInterrupt:
+            key = 3
+        action = editor.handle(key)
+        if action:
+            try:
+                curses.curs_set(0)
+            except curses.error:
+                pass
+            return editor.text if action == "submit" else None
+
+
 def _handle(screen, c: Controller, key, scroll, lines, focus_line, body_h) -> int:
     k = key
     if k == curses.KEY_RESIZE:
@@ -1785,40 +2292,42 @@ def _handle(screen, c: Controller, key, scroll, lines, focus_line, body_h) -> in
     if k == 3:  # Ctrl-C in normal mode: never crash; just stay
         return scroll
     if k == ord(":"):
-        screen.suspend()
-        try:
-            line = input(":")
-        except (EOFError, KeyboardInterrupt):
-            line = ""
-        screen.restore()
-        msg = c.execute(line)
-        if msg:
-            c.message = msg
+        line = _prompt_line(screen, ":", c.command_history)
+        if line is not None:
+            msg = c.execute(line)
+            if msg:
+                c.message = msg
         return 0
     if k == ord("/"):
-        screen.suspend()
-        try:
-            pat = input("/")
-        except (EOFError, KeyboardInterrupt):
-            pat = ""
-        screen.restore()
-        n = c.find(pat)
-        c.message = f"/{pat}: {n} hits" if pat else "find cleared"
-        c.find_target_line = c.find_hits[c.find_idx] if c.find_hits else None
+        if not c.find_allowed():
+            c.message = ("find is available only in verse view" if c.lang == "en" else
+                         "查找仅可用于经文视图")
+            return 0
+        pat = _prompt_line(screen, "/", c.find_history)
+        if pat is not None:
+            n = c.find(pat)
+            c.message = f"/{pat}: {n} hits" if pat else "find cleared"
+            c.find_target_line = c.find_hits[c.find_idx] if c.find_hits else None
         return 0
-    if k == ord("n"):
-        if c.find_hits:
+    if c.find_pat and c.find_allowed():
+        if k in (ord("j"), curses.KEY_DOWN):
             c.find_target_line = c.find_next(1)
-        return 0
-    if k == ord("N"):
-        if c.find_hits:
+            return 0
+        if k in (ord("k"), curses.KEY_UP):
             c.find_target_line = c.find_next(-1)
-        return 0
+            return 0
+        if k in (10, 13, curses.KEY_ENTER):
+            c.clear_find(suppress_focus=True)
+            return 0
+        if k == 27:
+            c.clear_find()
+            return 0
     if k in (9,):  # Tab
         c.toggle_nav()
         return 0
     if k == 63 or (hasattr(curses, "KEY_F0") and k == curses.KEY_F0 + 1):  # "?" or F1
         if not c.show_help:
+            c.clear_find()
             c.show_help = True
             c.help_scroll = 0
             c.message = tr(c.lang, "help_open")
