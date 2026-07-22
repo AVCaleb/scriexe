@@ -54,6 +54,13 @@ def test_release_workflow_installs_editable_and_fetches_before_tests():
     assert text.index("exeg fetch") < text.index("python -m pytest -q")
 
 
+def test_release_workflow_retries_idempotent_corpus_fetch():
+    text = (ROOT / ".github" / "workflows" / "release-scriexe.yml").read_text(encoding="utf-8")
+    assert "for attempt in 1 2 3" in text
+    assert "exeg fetch && exit 0" in text
+    assert "shell: bash" in text
+
+
 def test_release_workflow_packages_both_readmes():
     text = (ROOT / ".github" / "workflows" / "release-scriexe.yml").read_text(encoding="utf-8")
     assert "README.md" in text and "README_ZH.md" in text

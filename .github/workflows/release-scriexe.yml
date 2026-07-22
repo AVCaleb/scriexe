@@ -37,7 +37,14 @@ jobs:
       - name: Install build dependencies
         run: python -m pip install -e ".[dev,distribution]"
       - name: Fetch public test corpora
-        run: exeg fetch
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            exeg fetch && exit 0
+            if [[ "$attempt" == 3 ]]; then exit 1; fi
+            echo "fetch attempt $attempt failed; retrying retained downloads..."
+            sleep $((attempt * 10))
+          done
       - name: Test Python application
         run: python -m pytest -q
       - name: Stage core data
