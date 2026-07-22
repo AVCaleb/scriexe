@@ -8,7 +8,7 @@ const mappings = [
   ['darwin', 'x64', 'scriexe-darwin-x64'],
   ['linux', 'arm64', 'scriexe-linux-arm64'],
   ['linux', 'x64', 'scriexe-linux-x64'],
-  ['win32', 'x64', 'scriexe-win32-x64'],
+  ['win32', 'x64', 'scriexe-windows-x64'],
 ];
 
 for (const [platform, arch, expected] of mappings) {

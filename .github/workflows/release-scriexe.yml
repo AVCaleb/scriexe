@@ -111,7 +111,13 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           for package in build/native-packages/*.tgz; do
-            npm publish "$package" --access public --provenance
+            spec=$(tar -xOf "$package" package/package.json | \
+              node -e 'let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{const p=JSON.parse(s); console.log(`${p.name}@${p.version}`)})')
+            if npm view "$spec" version >/dev/null 2>&1; then
+              echo "$spec already published; skipping"
+            else
+              npm publish "$package" --access public --provenance
+            fi
           done
       - name: Test and publish main launcher
         env:

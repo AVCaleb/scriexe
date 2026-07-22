@@ -6,11 +6,11 @@ import shutil
 from pathlib import Path
 
 TARGETS = {
-    "darwin-arm64": ("darwin", "arm64"),
-    "darwin-x64": ("darwin", "x64"),
-    "linux-arm64": ("linux", "arm64"),
-    "linux-x64": ("linux", "x64"),
-    "win32-x64": ("win32", "x64"),
+    "darwin-arm64": ("darwin", "arm64", "scriexe-darwin-arm64"),
+    "darwin-x64": ("darwin", "x64", "scriexe-darwin-x64"),
+    "linux-arm64": ("linux", "arm64", "scriexe-linux-arm64"),
+    "linux-x64": ("linux", "x64", "scriexe-linux-x64"),
+    "win32-x64": ("win32", "x64", "scriexe-windows-x64"),
 }
 
 
@@ -23,9 +23,9 @@ def prepare(target: str, dist: Path, output: Path, version: str) -> None:
         shutil.rmtree(output)
     payload = output / "dist" / "scriexe"
     shutil.copytree(dist, payload)
-    os_name, cpu = TARGETS[target]
+    os_name, cpu, package_name = TARGETS[target]
     package = {
-        "name": f"scriexe-{target}",
+        "name": package_name,
         "version": version,
         "description": f"Native scriexe binary for {target}",
         "repository": {

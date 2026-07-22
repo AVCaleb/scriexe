@@ -22,6 +22,6 @@
     "scriexe-darwin-x64": "0.1.0",
     "scriexe-linux-arm64": "0.1.0",
     "scriexe-linux-x64": "0.1.0",
-    "scriexe-win32-x64": "0.1.0"
+    "scriexe-windows-x64": "0.1.0"
   }
 }

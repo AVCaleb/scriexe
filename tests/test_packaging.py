@@ -70,9 +70,17 @@ def test_release_workflow_retries_idempotent_corpus_fetch():
     assert "shell: bash" in text
 
 
+def test_release_workflow_skips_versions_already_published():
+    text = (ROOT / ".github" / "workflows" / "release-scriexe.yml").read_text(encoding="utf-8")
+    assert 'npm view "$spec" version' in text
+    assert "already published; skipping" in text
+
+
 def test_release_workflow_packages_both_readmes():
     text = (ROOT / ".github" / "workflows" / "release-scriexe.yml").read_text(encoding="utf-8")
     assert "README.md" in text and "README_ZH.md" in text
     package = (ROOT / "npm" / "scriexe" / "package.json").read_text(encoding="utf-8")
     assert '"README.md"' in package and '"README_ZH.md"' in package
     assert '"https://github.com/AVCaleb/scriexe"' in package
+    assert '"scriexe-windows-x64"' in package
+    assert '"scriexe-win32-x64"' not in package
