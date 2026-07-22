@@ -35,11 +35,11 @@ jobs:
           node-version: "20"
           registry-url: https://registry.npmjs.org
       - name: Install build dependencies
-        run: python -m pip install ".[dev,distribution]"
+        run: python -m pip install -e ".[dev,distribution]"
+      - name: Fetch public test corpora
+        run: exeg fetch
       - name: Test Python application
         run: python -m pytest -q
-      - name: Fetch public core corpora
-        run: exeg fetch --only ebible --versions cuvs,asv
       - name: Stage core data
         run: python packaging/build_core_data.py --output build/core
       - name: Build standalone application
@@ -101,5 +101,7 @@ jobs:
           for (const name of Object.keys(pkg.optionalDependencies)) pkg.optionalDependencies[name] = version;
           fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');
           NODE
+          cp README.md npm/scriexe/README.md
+          cp README_ZH.md npm/scriexe/README_ZH.md
           cd npm/scriexe
           npm publish --access public --provenance

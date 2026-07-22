@@ -6,7 +6,9 @@
     "scriexe": "bin/scriexe.js"
   },
   "files": [
-    "bin/scriexe.js"
+    "bin/scriexe.js",
+    "README.md",
+    "README_ZH.md"
   ],
   "engines": {
     "node": ">=18"
