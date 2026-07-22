@@ -50,8 +50,17 @@ def test_release_workflow_declares_all_targets():
 
 def test_release_workflow_installs_editable_and_fetches_before_tests():
     text = (ROOT / ".github" / "workflows" / "release-scriexe.yml").read_text(encoding="utf-8")
-    assert 'pip install -e ".[dev,distribution]"' in text
+    assert 'pip install -e ".[dev]"' in text
+    assert 'pip install -e ".[distribution]"' in text
     assert text.index("exeg fetch") < text.index("python -m pytest -q")
+    assert "build-native:\n    needs: test" in text
+
+
+def test_release_workflow_uses_current_macos_runner_labels():
+    text = (ROOT / ".github" / "workflows" / "release-scriexe.yml").read_text(encoding="utf-8")
+    assert "macos-15-intel" in text
+    assert "macos-15\n" in text
+    assert "macos-13" not in text
 
 
 def test_release_workflow_retries_idempotent_corpus_fetch():

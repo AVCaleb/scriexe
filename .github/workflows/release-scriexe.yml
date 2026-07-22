@@ -9,15 +9,37 @@ permissions:
   id-token: write
 
 jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Fetch public test corpora
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            exeg fetch && exit 0
+            if [[ "$attempt" == 3 ]]; then exit 1; fi
+            echo "fetch attempt $attempt failed; retrying retained downloads..."
+            sleep $((attempt * 10))
+          done
+      - name: Test Python application
+        run: python -m pytest -q
+
   build-native:
+    needs: test
     strategy:
       fail-fast: true
       matrix:
         include:
           - target: darwin-arm64
-            os: macos-14
+            os: macos-15
           - target: darwin-x64
-            os: macos-13
+            os: macos-15-intel
           - target: linux-arm64
             os: ubuntu-24.04-arm
           - target: linux-x64
@@ -35,18 +57,16 @@ jobs:
           node-version: "20"
           registry-url: https://registry.npmjs.org
       - name: Install build dependencies
-        run: python -m pip install -e ".[dev,distribution]"
-      - name: Fetch public test corpora
+        run: python -m pip install -e ".[distribution]"
+      - name: Fetch public core corpora
         shell: bash
         run: |
           for attempt in 1 2 3; do
-            exeg fetch && exit 0
+            exeg fetch --only ebible --versions cuvs,asv && exit 0
             if [[ "$attempt" == 3 ]]; then exit 1; fi
-            echo "fetch attempt $attempt failed; retrying retained downloads..."
+            echo "core fetch attempt $attempt failed; retrying retained downloads..."
             sleep $((attempt * 10))
           done
-      - name: Test Python application
-        run: python -m pytest -q
       - name: Stage core data
         run: python packaging/build_core_data.py --output build/core
       - name: Build standalone application
