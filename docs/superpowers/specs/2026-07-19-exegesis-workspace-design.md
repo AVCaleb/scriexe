@@ -34,7 +34,9 @@ local, verifiable corpus — never from model memory.
 - No bulk download of copyrighted translations from unlicensed sources; local
   storage of ESV/NASB95 text never exceeds what their license terms permit.
 - No traditional-script 和合本 initially (simplified only; add later if wanted).
-- No TUI/reader app; the terminal + editor + agent is the interface.
+- ~~No TUI/reader app; the terminal + editor + agent is the interface.~~
+  **Revised 2026-07-19:** a curses TUI is now the primary interface — see
+  `2026-07-19-tui-design.md`. The one-shot subcommands remain for scripts/agents.
 - No SWORD/diatheke dependency.
 
 ## Architecture

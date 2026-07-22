@@ -21,7 +21,10 @@ STRONGS_URLS = {
     "greek": f"{RAW}/openscriptures/strongs/master/greek/strongs-greek-dictionary.js",
     "hebrew": f"{RAW}/openscriptures/strongs/master/hebrew/strongs-hebrew-dictionary.js",
 }
-EBIBLE = {"web": "engwebp", "kjv": "eng-kjv", "cuvs": "cmn-cu89s"}
+EBIBLE = {"web": "engwebp", "kjv": "eng-kjv", "cuvs": "cmn-cu89s", "asv": "eng-asv"}
+CORE_VERSIONS = ("cuvs", "asv")
+OPTIONAL_PACK = ("strongs", "sblgnt", "wlc", "web", "kjv", "vulgate")
+VULGATE_URL = (f"{RAW}/jrichter/ClementineVulgateConverter/master/lat-clementine-vul.usfx.xml")
 _OSIS_NS = "{http://www.bibletechnologies.net/2003/OSIS/namespace}"
 
 
@@ -126,8 +129,13 @@ def fetch_wlc(log=print) -> None:
         log(f"wlc/{book.osis} done")
 
 
-def fetch_ebible(log=print) -> None:
-    for version, tid in EBIBLE.items():
+def fetch_ebible(versions=None, log=print) -> None:
+    selected = tuple(versions) if versions is not None else tuple(EBIBLE)
+    unknown = set(selected) - set(EBIBLE)
+    if unknown:
+        raise ValueError(f"unknown eBible version(s): {', '.join(sorted(unknown))}")
+    for version in selected:
+        tid = EBIBLE[version]
         zpath = download(f"https://ebible.org/Scriptures/{tid}_usfm.zip",
                          corpus.sources_dir() / f"{tid}_usfm.zip")
         out = corpus.sources_dir() / tid
@@ -147,6 +155,124 @@ def fetch_ebible(log=print) -> None:
                 corpus.write_verses(version, osis, verses)
                 count += 1
         log(f"{version}: {count} books")
+
+
+
+def _usfx_to_osis(book_id):
+    bid = book_id.strip()
+    return (canon.USFM_TO_OSIS.get(bid.upper())
+            or canon.BY_OSIS.get(bid)
+            or canon.BY_OSIS.get(bid.title()))
+
+
+def normalize_usfx(xml_text):
+    """Yield (osis, [Verse, ...]) per canonical book from a USFX document.
+
+    USFX is a flat sibling stream: <book id=...><c id=.../><v id=.../> text <ve/>
+    Verse text is the tail of <v> plus tails of inline elements up to <ve/>;
+    footnote/heading element text is skipped, only their tails kept.
+    """
+    root = ET.fromstring(xml_text)
+    ch = v = None
+    buf = ""
+    current = []
+    cur_osis = None
+    for el in root.iter():
+        tag = el.tag
+        if tag == "book":
+            if cur_osis and current:
+                yield cur_osis, current
+            cur_osis = _usfx_to_osis(el.get("id", ""))
+            current = []
+            ch = v = None
+            buf = ""
+        elif tag == "c":
+            try:
+                ch = int(el.get("id", ""))
+            except ValueError:
+                ch = None
+            v = None
+        elif tag == "v":
+            if v is not None and cur_osis and ch is not None:
+                current.append(corpus.Verse(ch, v, buf.strip()))
+            try:
+                v = int(el.get("id", ""))
+            except ValueError:
+                v = None
+            buf = (el.tail or "")
+        elif tag == "ve":
+            if v is not None and cur_osis and ch is not None:
+                current.append(corpus.Verse(ch, v, buf.strip()))
+            v = None
+            buf = ""
+        else:
+            if v is not None:
+                buf += (el.tail or "")
+    if cur_osis and current:
+        yield cur_osis, current
+
+
+def fetch_vulgate(log=print):
+    src = download(VULGATE_URL, corpus.sources_dir() / "lat-clementine-vul.usfx.xml")
+    count = 0
+    for osis, verses in normalize_usfx(src.read_text(encoding="utf-8")):
+        book = canon.BY_OSIS.get(osis)
+        # trim deuterocanonical additions (e.g. Dan 13-14, Esth 11-16) to the
+        # Protestant 66-book canonical chapter count
+        if book:
+            verses = [vv for vv in verses if vv.text and vv.chapter <= book.chapters]
+        else:
+            verses = [vv for vv in verses if vv.text]
+        if verses:
+            corpus.write_verses("vulgate", osis, verses)
+            count += 1
+    log(f"vulgate: {count} books")
+
+def _expected_books(name: str):
+    if name == "sblgnt":
+        return canon.NT_BOOKS
+    if name == "wlc":
+        return [b for b in canon.BOOKS if not b.nt]
+    return canon.BOOKS
+
+
+def dataset_present(name: str) -> bool:
+    if name == "strongs":
+        return (corpus.corpus_dir() / "strongs").is_dir()
+    return corpus.has_version(name)
+
+
+def dataset_installed(name: str) -> bool:
+    if name == "strongs":
+        d = corpus.corpus_dir() / "strongs"
+        return all((d / f).is_file() for f in
+                   ("greek.json", "hebrew.json", "greek-lemma-map.json"))
+    return all(corpus.has_book(name, b.osis) for b in _expected_books(name))
+
+
+def optional_pack_status() -> str:
+    if all(dataset_installed(name) for name in OPTIONAL_PACK):
+        return "installed"
+    if any(dataset_present(name) for name in OPTIONAL_PACK):
+        return "partial"
+    return "not_installed"
+
+
+def fetch_optional_pack(log=print) -> None:
+    actions = {
+        "strongs": lambda: fetch_strongs(log),
+        "sblgnt": lambda: fetch_sblgnt(log),
+        "wlc": lambda: fetch_wlc(log),
+        "web": lambda: fetch_ebible(("web",), log),
+        "kjv": lambda: fetch_ebible(("kjv",), log),
+        "vulgate": lambda: fetch_vulgate(log),
+    }
+    for name in OPTIONAL_PACK:
+        if dataset_installed(name):
+            log(f"{name}: already installed")
+            continue
+        log(f"{name}: downloading")
+        actions[name]()
 
 
 def check_integrity() -> list[str]:
@@ -175,7 +301,7 @@ def check_integrity() -> list[str]:
 
 
 def cmd_fetch(args) -> int:
-    only = set(args.only.split(",")) if args.only else {"strongs", "sblgnt", "wlc", "ebible"}
+    only = set(args.only.split(",")) if args.only else {"strongs", "sblgnt", "wlc", "ebible", "vulgate"}
     if "strongs" in only:
         fetch_strongs()
     if "sblgnt" in only:
@@ -183,7 +309,11 @@ def cmd_fetch(args) -> int:
     if "wlc" in only:
         fetch_wlc()
     if "ebible" in only:
-        fetch_ebible()
+        versions_arg = getattr(args, "versions", None)
+        versions = [v.strip() for v in versions_arg.split(",") if v.strip()] if versions_arg else None
+        fetch_ebible(versions)
+    if "vulgate" in only:
+        fetch_vulgate()
     problems = check_integrity()
     for p in problems:
         print(f"INTEGRITY: {p}")

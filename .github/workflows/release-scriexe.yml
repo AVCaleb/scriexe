@@ -1,0 +1,105 @@
+name: Release scriexe
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-native:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: darwin-arm64
+            os: macos-14
+          - target: darwin-x64
+            os: macos-13
+          - target: linux-arm64
+            os: ubuntu-24.04-arm
+          - target: linux-x64
+            os: ubuntu-24.04
+          - target: win32-x64
+            os: windows-2022
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: https://registry.npmjs.org
+      - name: Install build dependencies
+        run: python -m pip install ".[dev,distribution]"
+      - name: Test Python application
+        run: python -m pytest -q
+      - name: Fetch public core corpora
+        run: exeg fetch --only ebible --versions cuvs,asv
+      - name: Stage core data
+        run: python packaging/build_core_data.py --output build/core
+      - name: Build standalone application
+        run: pyinstaller --clean --noconfirm packaging/scriexe.spec
+      - name: Smoke test frozen executable
+        shell: bash
+        run: |
+          EXE="dist/scriexe/scriexe"
+          if [[ "${{ runner.os }}" == "Windows" ]]; then EXE="$EXE.exe"; fi
+          "$EXE" --version
+          EXEG_USER_ROOT="$RUNNER_TEMP/scriexe-user" "$EXE" passage "Jude 1:1" --versions cuvs,asv >/dev/null
+      - name: Prepare native npm package
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          python packaging/prepare_native_package.py \
+            --target "${{ matrix.target }}" --dist dist/scriexe \
+            --output "build/npm/${{ matrix.target }}" --version "$VERSION"
+          cd "build/npm/${{ matrix.target }}"
+          npm pack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-${{ matrix.target }}
+          path: build/npm/${{ matrix.target }}/*.tgz
+
+  publish:
+    needs: build-native
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: npm-*
+          path: build/native-packages
+          merge-multiple: true
+      - name: Publish native packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          for package in build/native-packages/*.tgz; do
+            npm publish "$package" --access public --provenance
+          done
+      - name: Test and publish main launcher
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          node --test npm/scriexe/test/*.test.js
+          node - "$VERSION" <<'NODE'
+          const fs = require('node:fs');
+          const file = 'npm/scriexe/package.json';
+          const version = process.argv[2];
+          const pkg = JSON.parse(fs.readFileSync(file));
+          pkg.version = version;
+          for (const name of Object.keys(pkg.optionalDependencies)) pkg.optionalDependencies[name] = version;
+          fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');
+          NODE
+          cd npm/scriexe
+          npm publish --access public --provenance

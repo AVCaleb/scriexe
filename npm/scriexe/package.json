@@ -1,0 +1,21 @@
+{
+  "name": "scriexe",
+  "version": "0.1.0",
+  "description": "Standalone installer and launcher for the exeg terminal Bible-exegesis workspace",
+  "bin": {
+    "scriexe": "bin/scriexe.js"
+  },
+  "files": [
+    "bin/scriexe.js"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "scriexe-darwin-arm64": "0.1.0",
+    "scriexe-darwin-x64": "0.1.0",
+    "scriexe-linux-arm64": "0.1.0",
+    "scriexe-linux-x64": "0.1.0",
+    "scriexe-win32-x64": "0.1.0"
+  }
+}

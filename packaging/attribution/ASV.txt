@@ -1,0 +1,4 @@
+American Standard Version (1901)
+Source: https://ebible.org/eng-asv/
+Status stated by source: Public Domain
+Packaged from the normalized eBible.org distribution.

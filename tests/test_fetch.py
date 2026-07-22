@@ -52,3 +52,52 @@ def test_integrity_accepts_mt_chapters(corpus_root):
     from exeg import corpus
     corpus.write_words("wlc", "Joel", [corpus.Word(c, 1, 1, "א", "1", "H1", "HNcmsa") for c in (1, 2, 3, 4)])
     assert fetch.check_integrity() == []
+
+
+def test_normalize_usfx_minimal():
+    from exeg import fetch
+    xml = ('<?xml version="1.0"?><usfx>'
+           '<book id="GEN"><h>Genesis</h><c id="1"/>'
+           '<v id="1"/> In principio creavit Deus cælum et terram.<ve/>'
+           '<v id="2"/> Terra autem erat inanis et vacua.<ve/>'
+           '</book>'
+           '<book id="1PE"><c id="3"/><v id="18"/> Quia et Christus.<ve/></book>'
+           '</usfx>')
+    out = list(fetch.normalize_usfx(xml))
+    books = {osis: verses for osis, verses in out}
+    assert "Gen" in books and "1Pet" in books
+    gen = {vv.verse: vv.text for vv in books["Gen"]}
+    assert gen[1].startswith("In principio creavit Deus")
+    assert gen[2].startswith("Terra autem")
+    assert books["1Pet"][0].text.startswith("Quia et Christus")
+
+
+def test_usfx_to_osis_handles_cases():
+    from exeg import fetch
+    assert fetch._usfx_to_osis("GEN") == "Gen"
+    assert fetch._usfx_to_osis("gen") == "Gen"
+    assert fetch._usfx_to_osis("1PE") == "1Pet"
+    assert fetch._usfx_to_osis("BOGUS") is None
+
+
+def test_optional_pack_fetches_in_dependency_order_and_skips(monkeypatch):
+    calls = []
+    monkeypatch.setattr(fetch, "dataset_installed", lambda name: name == "wlc")
+    monkeypatch.setattr(fetch, "fetch_strongs", lambda log=print: calls.append("strongs"))
+    monkeypatch.setattr(fetch, "fetch_sblgnt", lambda log=print: calls.append("sblgnt"))
+    monkeypatch.setattr(fetch, "fetch_wlc", lambda log=print: calls.append("wlc"))
+    monkeypatch.setattr(fetch, "fetch_ebible",
+                        lambda versions=None, log=print: calls.extend(versions))
+    monkeypatch.setattr(fetch, "fetch_vulgate", lambda log=print: calls.append("vulgate"))
+    fetch.fetch_optional_pack(log=lambda _msg: None)
+    assert calls == ["strongs", "sblgnt", "web", "kjv", "vulgate"]
+
+
+def test_optional_pack_status(monkeypatch):
+    monkeypatch.setattr(fetch, "dataset_installed", lambda _name: False)
+    monkeypatch.setattr(fetch, "dataset_present", lambda _name: False)
+    assert fetch.optional_pack_status() == "not_installed"
+    monkeypatch.setattr(fetch, "dataset_present", lambda name: name == "web")
+    assert fetch.optional_pack_status() == "partial"
+    monkeypatch.setattr(fetch, "dataset_installed", lambda _name: True)
+    assert fetch.optional_pack_status() == "installed"

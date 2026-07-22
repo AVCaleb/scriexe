@@ -29,7 +29,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     from exeg import fetch as _fetch
     f = sub.add_parser("fetch", help="download and normalize all datasets")
-    f.add_argument("--only", help="comma list: strongs,sblgnt,wlc,ebible")
+    f.add_argument("--only", help="comma list: strongs,sblgnt,wlc,ebible,vulgate")
+    f.add_argument("--versions", help="with --only ebible: comma list such as cuvs,asv")
     f.set_defaults(func=_fetch.cmd_fetch)
 
     from exeg import display as _display
@@ -40,9 +41,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     from exeg import importer as _importer
     ip = sub.add_parser("import", help="import a user-licensed translation (kept local)")
-    ip.add_argument("path", help="a .usfm/.sfm file, a directory of them, or a REF<TAB>text .tsv")
-    ip.add_argument("--version", required=True, help="corpus version name, e.g. nasb95")
+    ip.add_argument("path", nargs="?", help="a .usfm/.sfm file, a directory of them, or a REF<TAB>text .tsv")
+    ip.add_argument("--version", help="corpus version name, e.g. nasb95 (optional if the .tsv has a '# version:' header)")
     ip.add_argument("--format", choices=["usfm", "tsv"], help="override detection")
+    ip.add_argument("--example", action="store_true", help="print the required import format with an example")
     ip.set_defaults(func=_importer.cmd_import)
 
     from exeg import search as _search
@@ -65,6 +67,16 @@ def build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--versions", help="comma list (default: originals,esv,nasb95,cuvs)")
     sc.add_argument("--force", action="store_true", help="overwrite an existing study file")
     sc.set_defaults(func=_scaffold.cmd_scaffold)
+
+    from exeg import tui as _tui
+    tp = sub.add_parser("tui", help="interactive curses workspace")
+    tp.add_argument("--versions", help="comma list (default: local originals + cuvs + web)")
+    tp.set_defaults(func=_tui.cmd_tui)
+
+    from exeg import setup as _setup
+    sp = sub.add_parser("setup", help="first-run onboarding: language + paste API keys")
+    sp.add_argument("--lang", choices=["en", "zh"], help="set interface language non-interactively")
+    sp.set_defaults(func=_setup.cmd_setup)
     return p
 
 
@@ -76,8 +88,11 @@ def main(argv=None) -> int:
         print(__version__)
         return 0
     if not args.command:
-        parser.print_usage(sys.stderr)
-        return 2
+        # bare `exeg` launches the interactive TUI; first run shows the curses intro
+        from exeg import tui as _tui, setup as _setup
+        _load_env()
+        intro = sys.stdin.isatty() and not _setup.is_configured()
+        return _tui.run(_tui.Controller(intro=intro))
     try:
         _load_env()
         return args.func(args)

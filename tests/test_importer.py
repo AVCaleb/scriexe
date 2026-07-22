@@ -34,3 +34,50 @@ def test_cli_import(corpus_root, tmp_path, capsys):
     from exeg.cli import main
     assert main(["import", str(src), "--version", "nasb95"]) == 0
     assert corpus.has_version("nasb95")
+
+
+def test_import_tsv_version_from_header(corpus_root, tmp_path):
+    src = tmp_path / "my.tsv"
+    src.write_text("# version: myver\n"
+                   "# just a comment\n"
+                   "Gen 1:1\tIn the beginning God created.\n"
+                   "Gen 1:2\tAnd the earth was formless.\n", encoding="utf-8")
+    n = importer.import_path(src, None, log=lambda *a: None)
+    assert n == 1
+    assert corpus.has_version("myver")
+    assert corpus.read_verses("myver", "Gen")[0].text.startswith("In the beginning")
+
+
+def test_import_tsv_skips_comments_and_blank(corpus_root, tmp_path):
+    src = tmp_path / "c.tsv"
+    src.write_text("# header comment\n\n"
+                   "Ps 23:1\tThe LORD is my shepherd.\n", encoding="utf-8")
+    n = importer.import_path(src, "psonly", log=lambda *a: None)
+    assert n == 1
+    assert corpus.read_verses("psonly", "Ps")[0].text == "The LORD is my shepherd."
+
+
+def test_import_no_version_raises(corpus_root, tmp_path):
+    src = tmp_path / "nv.tsv"
+    src.write_text("Gen 1:1\ttext\n", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        importer.import_path(src, None, log=lambda *a: None)
+
+
+def test_import_example_flag(capsys):
+    from exeg.cli import main
+    assert main(["import", "--example"]) == 0
+    out = capsys.readouterr().out
+    assert "REFERENCE<TAB>" in out or "REF<TAB>" in out or "# version:" in out
+    assert "1Pet 3:18" in out
+
+
+def test_shipped_example_file_parses(corpus_root):
+    # the repo's examples/import-sample.tsv should import cleanly
+    from pathlib import Path
+    sample = Path(__file__).resolve().parents[1] / "examples" / "import-sample.tsv"
+    assert sample.exists()
+    n = importer.import_path(sample, None, log=lambda *a: None)
+    assert n >= 2  # Gen + Ps + 1Pet
+    assert corpus.has_version("import-sample")
+    assert corpus.read_verses("import-sample", "Gen")[0].text.startswith("In the beginning")

@@ -1,0 +1,17 @@
+# exeg translation import — TSV format
+# - one verse per line:  REFERENCE<TAB>verse text
+# - REFERENCE is a single verse: 'Gen 1:1', '1Pet 3:18', 'Ps 23:1' (中文 ok too: 彼前3:18)
+# - lines starting with # are comments; '# version: NAME' sets the corpus version
+# - a literal TAB separates the reference from the text (NOT spaces)
+# - verses may be in any order; partial books are fine
+#
+# Import with:   exeg import examples/import-sample.tsv
+# Then in the TUI:  :versions import-sample,cuvs   (or pick it on the settings page)
+# The imported text stays local (data/corpus/import-sample/, gitignored) and is never shared.
+
+# version: import-sample
+Gen 1:1	In the beginning God created the heavens and the earth.
+Gen 1:2	And the earth was without form, and void; and darkness was on the face of the deep.
+Ps 23:1	The LORD is my shepherd; I shall not want.
+1Pet 3:18	For Christ also suffered once for sins, the righteous for the unrighteous, that he might bring us to God.
+彼前3:18	因基督也曾一次为罪受苦，就是义的代替不义的，为要引我们到 神面前。

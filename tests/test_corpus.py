@@ -37,3 +37,26 @@ def test_get_words_range(corpus_root):
     corpus.write_words("sblgnt", "1Pet", ww)
     got = corpus.get_words(parse_ref("1Pet 3:18-19"), "sblgnt")
     assert [w.verse for w in got] == [18, 19]
+
+
+def test_user_corpus_overrides_bundled_resource(tmp_path, monkeypatch):
+    user = tmp_path / "user"
+    resources = tmp_path / "resources"
+    monkeypatch.setenv("EXEG_ROOT", str(user))
+    monkeypatch.setenv("EXEG_RESOURCE_ROOT", str(resources))
+    bundled = resources / "data" / "corpus" / "asv" / "Jude.tsv"
+    bundled.parent.mkdir(parents=True)
+    bundled.write_text("1\t1\tbundled\n", encoding="utf-8")
+    assert corpus.read_verses("asv", "Jude")[0].text == "bundled"
+    corpus.write_verses("asv", "Jude", [Verse(1, 1, "user")])
+    assert corpus.read_verses("asv", "Jude")[0].text == "user"
+
+
+def test_default_user_root_is_platform_specific(tmp_path, monkeypatch):
+    monkeypatch.delenv("EXEG_ROOT", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    assert corpus.default_user_root("Darwin") == tmp_path / "Library" / "Application Support" / "scriexe"
+    assert corpus.default_user_root("Linux") == tmp_path / "xdg" / "scriexe"
+    assert corpus.default_user_root("Windows") == tmp_path / "Local" / "scriexe"

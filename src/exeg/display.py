@@ -4,7 +4,7 @@ from exeg.canon import Book
 from exeg.refs import Ref
 
 LABELS = {"sblgnt": "SBLGNT", "wlc": "WLC", "esv": "ESV", "nasb95": "NASB95",
-          "cuvs": "和合本", "web": "WEB", "kjv": "KJV"}
+          "cuvs": "和合本", "web": "WEB", "kjv": "KJV", "asv": "ASV", "vulgate": "Vulgate"}
 
 
 def default_versions(book: Book) -> list[str]:

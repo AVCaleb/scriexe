@@ -1,0 +1,4 @@
+Chinese Union Version (Simplified), 新标点和合本
+Source: https://ebible.org/cmn-cu89s/
+Status stated by source: Public Domain
+Packaged from the normalized eBible.org distribution.

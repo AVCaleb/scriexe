@@ -11,9 +11,14 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+distribution = [
+    "pyinstaller>=6",
+    "windows-curses>=2.4; sys_platform == 'win32'",
+]
 
 [project.scripts]
 exeg = "exeg.cli:main"
+scriexe = "exeg.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

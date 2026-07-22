@@ -4,3 +4,7 @@ __pycache__/
 *.egg-info/
 .env
 .DS_Store
+AGENTS.md
+notes/
+docs/
+

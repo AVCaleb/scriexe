@@ -20,7 +20,8 @@ def test_render_parallel(corpus_root):
     # web lacks v19 -> explicit marker, not silent skip
     assert "- **WEB** [not in WEB]" in out
 
-def test_unavailable_api_version_noted(corpus_root):
+def test_unavailable_api_version_noted(corpus_root, monkeypatch):
+    monkeypatch.delenv("ESV_API_KEY", raising=False)
     seed(corpus_root)
     out = display.render(parse_ref("1Pet 3:18"), ["esv", "cuvs"])
     assert "> ESV unavailable" in out
