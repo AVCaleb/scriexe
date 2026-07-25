@@ -71,6 +71,8 @@ S = {
     "esc_save_hint": {"en": "Esc save · Ctrl-C discard", "zh": "Esc 保存 · Ctrl-C 放弃"},
     "vim_note_hint": {"en": "{mode} · :wq/ZZ save · :q!/ZQ discard",
                       "zh": "{mode} · :wq/ZZ 保存 · :q!/ZQ 放弃"},
+    "note_unsaved": {"en": "unsaved changes — :wq to save, :q! to discard",
+                     "zh": "有未保存修改 — :wq 保存，:q! 放弃"},
     "note_edit_prompt": {"en": "(i to edit)", "zh": "(i 编辑)"},
     # word study
     "word_study": {"en": "word study", "zh": "字词研究"},

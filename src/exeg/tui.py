@@ -1166,7 +1166,7 @@ class Controller:
         self.note_cy = 0
         self.note_cx = 0
         self.note_dirty = False
-        self.note_mode = "insert"
+        self.note_mode = "normal" if self.vim_keys else "insert"
         self.note_anchor = None
         self.note_pending = ""
         self.editing = True
@@ -1542,7 +1542,7 @@ $ Esc          save and leave the inline editor
 $ Ctrl-C       discard this editing session
 $ Arrow keys   move the inline editor cursor
 Notes are stored as local Markdown files. A pencil mark identifies verses that already have notes.
-Optional Vim-style note keys are disabled by default and can be enabled in Settings for the inline editor. Insert, Normal, and Visual modes make system clipboard copy and paste convenient: yy copies a line; v/V selects and y copies; p/P pastes; :wq or ZZ saves; :q! or ZQ discards.
+Optional Vim-style note keys are disabled by default and can be enabled in Settings for the inline editor. The note opens in Normal mode, so you can yank text without typing: press i/a to insert, Esc to return to Normal. Normal/Visual modes make system clipboard copy and paste convenient: yy copies a line; v/V selects and y copies; p/P pastes; :wq or ZZ saves; :q! or ZQ discards; :q leaves an unchanged note without saving.
 For IME-heavy Chinese input, use :set editor popup. The popup editor accepts normal terminal input and ignores Vim-style keys; press Ctrl-D to finish or Ctrl-C to cancel. A blank submission keeps the existing note.
 
 # Find in preview
@@ -1679,7 +1679,7 @@ $ Esc          保存并退出内嵌编辑器
 $ Ctrl-C       放弃本次编辑
 $ 方向键       移动内嵌编辑器光标
 笔记以本地 Markdown 文件保存。已有笔记的经节旁会显示铅笔标记。
-可选的 Vim 风格笔记键位默认关闭，可在设置页为内嵌编辑器启用。Insert、Normal 和 Visual 模式便于使用系统剪贴板复制粘贴：yy 复制整行；v/V 选择后按 y 复制；p/P 粘贴；:wq 或 ZZ 保存；:q! 或 ZQ 放弃。
+可选的 Vim 风格笔记键位默认关闭，可在设置页为内嵌编辑器启用。笔记以普通模式打开，可直接抽取文本而无需进入插入：按 i/a 插入，Esc 回到普通模式。普通与可视模式便于使用系统剪贴板复制粘贴：yy 复制整行；v/V 选择后按 y 复制；p/P 粘贴；:wq 或 ZZ 保存；:q! 或 ZQ 放弃；:q 在未修改时直接退出不保存。
 中文输入法较多时，可使用 :set editor popup。弹出编辑器使用普通终端输入且忽略 Vim 键位；Ctrl-D 完成，Ctrl-C 取消；空白提交会保留原笔记。
 
 # 当前预览内查找
@@ -2549,6 +2549,11 @@ def _handle_vim_note_key(screen, c: Controller, ch) -> None:
             c.end_edit(save=True)
         elif command == "q!":
             c.end_edit(save=False)
+        elif command == "q":
+            if c.note_dirty:
+                c.message = tr(c.lang, "note_unsaved")
+            else:
+                c.end_edit(save=False)
         elif command is not None:
             c.message = f"unknown note command: {command}"
 

@@ -489,8 +489,25 @@ def vim_editor_controller():
     return c
 
 
-def test_vim_escape_enters_normal_and_i_a_return_to_insert(tmp_notes):
+def test_begin_edit_starts_in_normal_when_vim_keys_enabled(tmp_notes):
     c = vim_editor_controller()
+    assert c.editing is True and c.note_mode == "normal"
+    assert c.note_dirty is False
+
+
+def test_begin_edit_starts_in_insert_without_vim_keys(tmp_notes):
+    c = make_controller()
+    c.commit()
+    c.vim_keys = False
+    c.begin_edit()
+    assert c.note_mode == "insert"
+
+
+def test_vim_i_then_escape_returns_to_normal_and_clamps_cursor(tmp_notes):
+    c = vim_editor_controller()
+    assert c.note_mode == "normal"
+    tui._handle_vim_note_key(None, c, "i")
+    assert c.note_mode == "insert"
     c.insert_char("abc")
     tui._handle_vim_note_key(None, c, "\x1b")
     assert c.editing is True and c.note_mode == "normal"
@@ -500,6 +517,31 @@ def test_vim_escape_enters_normal_and_i_a_return_to_insert(tmp_notes):
     tui._handle_vim_note_key(None, c, "\x1b")
     tui._handle_vim_note_key(None, c, "a")
     assert c.note_mode == "insert" and c.note_cx == 3
+
+
+def test_vim_clean_colon_q_exits_without_saving(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    assert c.note_dirty is False
+    monkeypatch.setattr(tui, "_prompt_line",
+                        lambda _screen, _prefix, _history: "q")
+    tui._handle_vim_note_key(None, c, ":")
+    assert c.editing is False
+    assert "" == notes.read_verse("1Pet", 3, 18) or notes.read_verse("1Pet", 3, 18) == ""
+
+
+def test_vim_dirty_colon_q_keeps_editor_open_with_guidance(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["changed"]
+    c.note_dirty = True
+    monkeypatch.setattr(tui, "_prompt_line",
+                        lambda _screen, _prefix, _history: "q")
+    tui._handle_vim_note_key(None, c, ":")
+    assert c.editing is True            # stayed open
+    assert c.note_dirty is True
+    msg = c.message
+    assert ":wq" in msg and ":q!" in msg
+    # the note was not written
+    assert "changed" not in notes.read_verse("1Pet", 3, 18)
 
 
 def test_vim_normal_movement_supports_hjkl_zero_dollar_gg_G(tmp_notes):

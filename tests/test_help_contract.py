@@ -82,8 +82,12 @@ def test_help_documents_chapter_fast_nav_and_copy_keys(lang):
 @pytest.mark.parametrize("lang", ["en", "zh"])
 def test_help_documents_optional_vim_note_copy_paste(lang):
     text = "\n".join(line for line, _kind in tui.help_lines(lang))
-    for token in ("yy", "v/V", "p/P", ":wq", ":q!", "ZZ", "ZQ"):
+    for token in ("yy", "v/V", "p/P", ":wq", ":q!", ":q", "ZZ", "ZQ"):
         assert token in text
+    if lang == "en":
+        assert "Normal mode" in text and "unchanged note" in text
+    else:
+        assert "普通模式" in text and "未修改" in text
     assert ("disabled by default" in text if lang == "en" else "默认关闭" in text)
     assert ("system clipboard" in text if lang == "en" else "系统剪贴板" in text)
 
