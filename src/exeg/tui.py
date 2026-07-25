@@ -230,7 +230,7 @@ def _copy_clipboard(text: str, system=None, which=shutil.which,
     if command is None:
         return False, "no clipboard command found"
     try:
-        result = runner(command, input=text, text=True,
+        result = runner(command, input=text, encoding="utf-8",
                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                         check=False)
     except OSError as e:
@@ -247,7 +247,7 @@ def _read_clipboard(system=None, which=shutil.which,
     if command is None:
         return None, "no clipboard command found"
     try:
-        result = runner(command, capture_output=True, text=True, check=False)
+        result = runner(command, capture_output=True, encoding="utf-8", check=False)
     except OSError as e:
         return None, str(e)
     if result.returncode != 0:
@@ -451,6 +451,7 @@ class Controller:
             return
         node, view, word = self.bookmark
         self._set_focus_state(node, view, word)
+        self._persist_reading_position()
         self.nav_visible = False
         self.message = tr(self.lang, "returned", ref=f"{node.book().en} {node.chapter}:{node.verse}")
 
@@ -1060,6 +1061,7 @@ class Controller:
             else:
                 book_idx += 1
                 chapter = 1
+        self.study_set = None
         self.goto(Node(book_idx, chapter, 1), view="verse", word_idx=None)
 
     def move_word_cursor(self, delta: int):
@@ -2183,7 +2185,9 @@ def _title(c: Controller) -> str:
     if c.study_set is not None:
         ind += " · set:" + c.study_set.en_label()
     if c.editing:
-        ind += " · INSERT"
+        edit_mode = ({"visual_line": "V-LINE"}.get(c.note_mode,
+                     c.note_mode.upper()) if c.vim_keys else "INSERT")
+        ind += f" · {edit_mode}"
     return f" exeg · {crumb} · scope:{c.scope}{extra}{' ±'+str(c.window) if c.scope=='window' else ''}{ind} "
 
 
@@ -2410,8 +2414,14 @@ def _note_selected_spans(c: Controller) -> dict[int, tuple[int, int]]:
 
 def _highlight_note_selection(screen, c: Controller, editor_top: int,
                               width: int, color: bool) -> None:
+    try:
+        height, _screen_width = screen.stdscr.getmaxyx()
+    except (AttributeError, curses.error):
+        height = -1
     for line_idx, (start, end) in _note_selected_spans(c).items():
         row = editor_top + 2 + line_idx
+        if height >= 0 and row >= height - 1:
+            continue
         line = c.note_lines[line_idx]
         col = _cell_width(line[:start])
         cells = max(1, _cell_width(line[start:end]))

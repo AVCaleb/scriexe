@@ -81,6 +81,14 @@ def test_move_chapter_clamps_at_canonical_endpoints(tmp_notes):
     assert (c.focus.book().osis, c.focus.chapter) == ("Rev", 22)
 
 
+def test_move_chapter_clears_temporary_study_set(tmp_notes):
+    c = tui.Controller(intro=True)
+    c.study_set = refs.parse_ref("Matt 1:1-3")
+    c.move_chapter(1)
+    assert c.study_set is None
+    assert (c.focus.book().osis, c.focus.chapter, c.focus.verse) == ("Matt", 2, 1)
+
+
 def test_brackets_route_to_previous_and_next_chapter(tmp_notes):
     c = tui.Controller(intro=True)
     c.intro = False
@@ -143,6 +151,24 @@ def test_clipboard_command_mapping(system, available, expected):
 def test_clipboard_read_command_mapping(system, available, expected):
     which = lambda name: f"/bin/{name}" if name in available else None
     assert tui._clipboard_read_command(system, which) == expected
+
+
+def test_clipboard_adapters_use_utf8_without_a_shell():
+    calls = []
+
+    class Result:
+        returncode = 0
+        stderr = ""
+        stdout = "粘贴"
+
+    def runner(command, **kwargs):
+        calls.append((command, kwargs))
+        return Result()
+
+    assert tui._copy_clipboard("复制", "Darwin", lambda _name: "/bin/tool", runner) == (True, "")
+    assert tui._read_clipboard("Darwin", lambda _name: "/bin/tool", runner) == ("粘贴", "")
+    assert all(kwargs.get("encoding") == "utf-8" for _command, kwargs in calls)
+    assert all("shell" not in kwargs for _command, kwargs in calls)
 
 
 def test_y_copies_highlighted_verse_without_shell(tmp_notes, monkeypatch):
@@ -585,6 +611,32 @@ def test_vim_visual_selected_spans_are_visible_ranges(tmp_notes):
     assert tui._note_selected_spans(c) == {0: (0, 5), 1: (0, 4)}
 
 
+def test_visual_highlight_never_overwrites_status_row(tmp_notes):
+    c = vim_editor_controller()
+    c.note_lines = ["alpha", "beta"]
+    c.note_anchor = (0, 0)
+    c.note_cy, c.note_mode = 1, "visual_line"
+
+    class FakeWindow:
+        def __init__(self):
+            self.rows = []
+        def getmaxyx(self):
+            return (20, 80)
+        def chgat(self, row, col, length, attr):
+            self.rows.append(row)
+
+    screen = type("FakeScreen", (), {})()
+    screen.stdscr = FakeWindow()
+    tui._highlight_note_selection(screen, c, editor_top=16, width=80, color=False)
+    assert screen.stdscr.rows == [18]
+
+
+def test_vim_title_reports_actual_note_mode(tmp_notes):
+    c = vim_editor_controller()
+    c.note_mode = "normal"
+    assert "NORMAL" in tui._title(c) and "INSERT" not in tui._title(c)
+
+
 def test_vim_p_and_P_paste_multiline_clipboard(tmp_notes, monkeypatch):
     c = vim_editor_controller()
     c.note_lines = ["abcd"]
@@ -683,6 +735,17 @@ def test_bookmark_back_roundtrip():
     assert c.focus.verse == 22
     c.back()                         # return to bookmark
     assert c.focus.verse == 18
+
+
+def test_back_persists_returned_bookmark_as_last_read(tmp_notes):
+    c = make_controller()
+    c.commit()
+    c.set_bookmark()
+    c.move_focus(2)
+    c.back()
+    assert notes.read_meta()["last_read"] == {
+        "book": "1Pet", "chapter": 3, "verse": 18,
+    }
 
 
 def test_bookmark_persists_through_commit():
