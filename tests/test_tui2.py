@@ -819,6 +819,39 @@ def test_controller_lang_from_meta(tmp_notes):
     assert c.translations == ["cuvs"]
 
 
+def test_settings_focus_line_tracks_selected_item(tmp_notes):
+    c = tui.Controller(intro=True)
+    c.open_settings()
+    c.settings_cursor = c._selectable_settings_indexes()[-1]
+    lines, focus_line = c.render_settings()
+    assert "Restore all settings" in lines[focus_line][0]
+
+
+def test_intro_focus_line_tracks_begin_action(tmp_notes):
+    c = tui.Controller(intro=True)
+    c.intro_cursor = c._selectable_intro_indexes()[-1]
+    lines, focus_line = c.render_intro()
+    assert "Begin" in lines[focus_line][0]
+
+
+def test_small_settings_pane_scrolls_selected_row_into_view(tmp_notes):
+    c = tui.Controller(intro=True)
+    c.open_settings()
+    c.settings_cursor = c._selectable_settings_indexes()[-1]
+    lines, focus_line = c.render_settings()
+
+    class FakeWindow:
+        def __init__(self):
+            self.writes = []
+        def addstr(self, y, x, text, attr):
+            self.writes.append((y, text))
+
+    screen = type("FakeScreen", (), {})()
+    screen.stdscr = FakeWindow()
+    scroll = tui._draw_lines(screen, lines, 1, 5, 0, 80, 0, False, focus_line)
+    assert scroll > 0
+
+
 def test_open_settings_and_toggle_lang(tmp_notes):
     c = make_controller()
     c.open_settings()

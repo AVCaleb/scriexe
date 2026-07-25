@@ -474,6 +474,7 @@ class Controller:
     def render_intro(self):
         title = "exeg — first-run setup  (j/k move · Enter select · choose Begin to start)"
         lines = [(title, KIND_HEADER), ("─" * 60, KIND_COLHDR), ("", KIND_NORMAL)]
+        focus_line = -1
         for i, it in enumerate(self.intro_items()):
             t = it["type"]
             if t == "section":
@@ -495,7 +496,9 @@ class Controller:
             prefix = "  ▶ " if sel else "    "
             lines.append((f"{prefix}{mark} {it['label']}",
                           KIND_OCCUR_SEL if sel else KIND_OCCUR))
-        return lines, 2
+            if sel:
+                focus_line = len(lines) - 1
+        return lines, focus_line
 
     def settings_items(self):
         from exeg import i18n
@@ -585,6 +588,7 @@ class Controller:
         hint = tr(self.lang, "settings_title")
         lines = [(hint, KIND_HEADER),
                 ("─" * 60, KIND_COLHDR), ("", KIND_NORMAL)]
+        focus_line = -1
         for i, it in enumerate(self.settings_items()):
             t = it["type"]
             if t == "section":
@@ -607,6 +611,8 @@ class Controller:
                 prefix = "  ▶ " if sel else "    "
                 lines.append((f"{prefix}↺ {it['label']}",
                               KIND_OCCUR_SEL if sel else KIND_OCCUR))
+                if sel:
+                    focus_line = len(lines) - 1
                 continue
             else:
                 mark = ""
@@ -614,10 +620,12 @@ class Controller:
             prefix = "  ▶ " if sel else "    "
             lines.append((f"{prefix}{mark} {it['label']}",
                           KIND_OCCUR_SEL if sel else KIND_OCCUR))
+            if sel:
+                focus_line = len(lines) - 1
         lines.append(("", KIND_NORMAL))
         lines.append(("j/k move · Enter toggle/paste · Esc back  ·  Ctrl-C skips a key paste",
                       KIND_NOTE))
-        return lines, 2
+        return lines, focus_line
 
     # ---- note target -------------------------------------------------------
 
@@ -1822,7 +1830,8 @@ def run(controller: Controller | None = None) -> int:
             top, bottom = 1, h - 1
             body_h = bottom - top
             if controller.intro:
-                scroll = _draw_lines(screen, lines, top, body_h, 0, w, 0, color)
+                scroll = _draw_lines(screen, lines, top, body_h, 0, w, 0, color,
+                                     focus_line)
             elif controller.show_help:
                 controller.help_scroll = _draw_lines(
                     screen, lines, top, body_h, 0, w, controller.help_scroll, color)
