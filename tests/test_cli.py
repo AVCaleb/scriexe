@@ -14,7 +14,7 @@ def test_no_args_launches_tui_fallback(capsys, monkeypatch):
 
 def test_version_flag(capsys):
     assert main(["--version"]) == 0
-    assert "0.1.0" in capsys.readouterr().out
+    assert "0.2.0" in capsys.readouterr().out
 
 
 def test_cli_reconfigures_narrow_windows_stream_for_multilingual_output(monkeypatch):

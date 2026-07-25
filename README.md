@@ -1,6 +1,6 @@
 <div align="center">
 
-# scriexe
+# Scriexe
 
 ### Read deeply. Study in context. Stay in flow.
 
@@ -17,11 +17,13 @@ npm install -g scriexe
 scriexe
 ```
 
+
+
 </div>
 
 ---
 
-## Why scriexe?
+## Why Scriexe?
 
 Serious Bible study is often fragmented across translation websites, lexicons, search tools, note files, and browser tabs. Every switch breaks the reading context: the passage moves out of sight, observations become scattered, and the work of interpretation becomes separated from the text that prompted it.
 
@@ -31,13 +33,13 @@ scriexe is not designed to flood the screen with information. It is designed to 
 
 ## One workspace, one continuous study flow
 
-- **Contextual Reading** — Conventional study tools separate passage navigation, translation comparison, and surrounding context across different pages or tabs, forcing you to find your place repeatedly. scriexe keeps the four-level navigator, parallel translations, and adjustable reading scope together, so the passage remains visible while the depth of view changes.
+- **Contextual Reading** — Conventional study tools separate passage navigation, translation comparison, and surrounding context across different pages or tabs, forcing you to find your place repeatedly. scriexe keeps the four-level navigator, parallel translations, and adjustable window, chapter, and verse scopes together. Chapter scope follows verse movement immediately without adding a visual highlight, and the last committed reading position is restored on the next launch.
 
-- **Original-Language Study** — A normal lexicon lookup pulls you away from the verse and leaves you to reconstruct its context afterward. scriexe continues directly from verse to Greek or Hebrew word, bringing lemmas, Strong’s numbers, morphology, and corpus occurrences into the same reading path—and preserving a bookmark for the way back.
+- **Original-Language Study** — A normal lexicon lookup pulls you away from the verse and leaves you to reconstruct its context afterward. scriexe continues directly from verse to Greek or Hebrew word in navigator, bringing forms, lemmas, Strong’s numbers, morphology, source glosses, and corpus occurrences into the same reading path—and preserving a bookmark for the way back. WLC Hebrew body rows align to the pane’s right edge.
 
-- **Local Study Notes** — When observations live in unrelated documents, the connection between a note and the text that prompted it gradually disappears. scriexe attaches plain Markdown notes directly to verses and word occurrences, marks passages you have studied, and keeps every note portable, searchable, and under your control.
+- **Local Study Notes** — When observations live in unrelated documents, the connection between a note and the text that prompted it gradually disappears. scriexe attaches plain Markdown notes directly to verses and word occurrences, marks passages you have studied, and keeps every note portable, searchable, and under your control. Inline editing supports an optional Vim-style keymap with system-clipboard yank and paste, while a popup editor provides an IME-friendly alternative.
 
-- **Keyboard-First Flow** — Repeated mouse movement and window switching interrupt the rhythm of close reading. scriexe keeps navigation, scope changes, search, notes, bookmarks, and occurrence jumps on the keyboard, while Unicode-aware wrapping keeps multilingual passages aligned and readable.
+- **Keyboard-First Flow** — Repeated mouse movement and window switching interrupt the rhythm of close reading. scriexe keeps navigation, scope changes, search, notes, bookmarks, copying, and occurrence jumps on the keyboard. Movable views support five-item and first/last jumps; preview find moves directly among matches; canonically ordered corpus-search results report total and per-translation counts; and Unicode-aware wrapping keeps multilingual passages aligned and readable.
 
 ## What is included?
 
@@ -58,7 +60,7 @@ During onboarding, you may choose **Download all optional study data**. The same
 | WEB and KJV | Additional English comparison texts |
 | Vulgate | Latin comparison text |
 
-ESV and NASB95 are not redistributed with scriexe. They can be accessed only through the user’s own API key or a locally imported copy where supported. User-licensed translations are kept outside the installed package and are never included in release artifacts.
+ESV and NASB95 are not redistributed with scriexe due to copyright constraints. They can be accessed only through the user’s own API key or a locally imported copy where supported. User-licensed translations are kept outside the installed package and are never included in release artifacts.
 
 ## Quick start
 
@@ -100,18 +102,24 @@ The TUI opens directly into the reading workspace. A typical study session can r
 | --- | --- | --- |
 | Anywhere | `Tab` | Open or close the navigator |
 | Navigator | `j` / `k` | Move through items |
+| Navigator | `Ctrl-U` / `Ctrl-D`, `g` / `G` | Move five items; jump to the first or last item |
 | Navigator | `h` / `l` | Move up or drill down a column |
 | Navigator | `Enter` | Open the selected verse or word |
 | Reading | `j` / `k` | Move between verses |
+| Reading | `Ctrl-U` / `Ctrl-D`, `g` / `G` | Move five verses; jump to the first or last verse |
 | Reading | `z` | Cycle window, chapter, and verse scope |
 | Reading | `+` / `-` | Resize the context window |
+| Reading | `y` | Copy the focused reference and displayed translations |
 | Reading | `p` / `b` | Set and return to a bookmark |
 | Reading | `i` | Edit a note |
 | Reading | `/` | Find text in the current verse preview |
-| Find active | `j` / `k` | Move between matches |
+| Find active | `n` / `N` | Move to the next or previous match |
+| Find active | `Ctrl-U` / `Ctrl-D`, `g` / `G` | Move five matches; jump to the first or last match |
 | Find active | `Enter` / `Esc` | Accept the viewport / clear find |
 | Reading | `o` | Open Settings |
-| Word/results | `Enter` | Jump to the selected occurrence |
+| Word/results | `j` / `k`, `Ctrl-U` / `Ctrl-D`, `g` / `G` | Select, move five, or jump to the first/last entry |
+| Word/results | `Enter` | Open the selected occurrence or search result |
+| Vim note editor | `:q!` / `:!q` / `ZQ` | Discard the editing session |
 | Anywhere | `?` | Open help |
 
 ## Command-line tools
@@ -127,9 +135,6 @@ scriexe search "living hope"
 
 # Study a Strong’s number or lemma after installing study data
 scriexe word G3958
-
-# Download or refresh public datasets
-scriexe fetch
 
 # Import a user-provided translation
 scriexe import ./translation.usfm --version mytranslation
@@ -222,8 +227,7 @@ Bug reports, terminal compatibility reports, documentation improvements, and foc
 ---
 
 <div align="center">
-
-**A quieter interface for deeper reading.**
+**A quieter interface for deeper engagement with Scripture.**
 
 [Install](#quick-start) · [Features](#one-workspace-one-continuous-study-flow) · [Privacy](#local-first-by-design) · [Roadmap](#planned-ai-assisted-exegesis)
 

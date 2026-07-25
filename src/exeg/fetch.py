@@ -1,14 +1,57 @@
 """Download and normalize open datasets into the local corpus (exeg fetch)."""
 import json
 import re
+import ssl
+import sys
 import unicodedata
 import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
+from pathlib import Path
 
 from exeg import canon, corpus
 from exeg.corpus import Verse, Word
 from exeg.usfm import parse_usfm
+
+
+def _build_ssl_context() -> ssl.SSLContext:
+    """Create an SSL context with a CA bundle that works in PyInstaller builds.
+
+    PyInstaller-bundled Python often cannot locate the system CA certificate
+    store (especially on macOS where certs live in the Keychain).  We try, in
+    order: certifi, a cacert.pem bundled next to the executable, and common
+    system paths.
+    """
+    candidates: list[Path] = []
+
+    # 1. certifi (if installed at build time and frozen into the bundle)
+    try:
+        import certifi
+        candidates.append(Path(certifi.where()))
+    except Exception:
+        pass
+
+    # 2. cacert.pem shipped alongside the binary (PyInstaller datas entry)
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    else:
+        base = Path(__file__).resolve().parent
+    candidates.append(base / "cacert.pem")
+    candidates.append(base / "data" / "cacert.pem")
+
+    # 3. common system certificate locations (macOS / Linux)
+    candidates.extend([
+        Path("/etc/ssl/cert.pem"),
+        Path("/etc/pki/tls/certs/ca-bundle.crt"),
+        Path("/etc/ssl/certs/ca-certificates.crt"),
+    ])
+
+    for cert_path in candidates:
+        if cert_path.is_file():
+            return ssl.create_default_context(cafile=str(cert_path))
+
+    # last resort — let OpenSSL probe the OS default trust store
+    return ssl.create_default_context()
 
 RAW = "https://raw.githubusercontent.com"
 MORPHGNT_FILES = [  # (repo filename stem, verified 2026-07-19) — canonical NT order
@@ -28,12 +71,22 @@ VULGATE_URL = (f"{RAW}/jrichter/ClementineVulgateConverter/master/lat-clementine
 _OSIS_NS = "{http://www.bibletechnologies.net/2003/OSIS/namespace}"
 
 
+_SSL_CTX: ssl.SSLContext | None = None
+
+
+def _ssl_context() -> ssl.SSLContext:
+    global _SSL_CTX
+    if _SSL_CTX is None:
+        _SSL_CTX = _build_ssl_context()
+    return _SSL_CTX
+
+
 def download(url: str, dest, force: bool = False):
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists() and not force:
         return dest
     req = urllib.request.Request(url, headers={"User-Agent": "exeg/0.1 (personal study tool)"})
-    with urllib.request.urlopen(req, timeout=60) as r:
+    with urllib.request.urlopen(req, timeout=60, context=_ssl_context()) as r:
         dest.write_bytes(r.read())
     return dest
 
@@ -106,7 +159,7 @@ def fetch_strongs(log=print) -> dict[str, str]:
 
 
 def load_greek_lemma_map() -> dict[str, str]:
-    path = corpus.corpus_dir() / "strongs" / "greek-lemma-map.json"
+    path = corpus.strongs_path("greek-lemma-map.json")
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
@@ -238,14 +291,13 @@ def _expected_books(name: str):
 
 def dataset_present(name: str) -> bool:
     if name == "strongs":
-        return (corpus.corpus_dir() / "strongs").is_dir()
+        return corpus.strongs_dir().is_dir()
     return corpus.has_version(name)
 
 
 def dataset_installed(name: str) -> bool:
     if name == "strongs":
-        d = corpus.corpus_dir() / "strongs"
-        return all((d / f).is_file() for f in
+        return all(corpus.strongs_path(f).is_file() for f in
                    ("greek.json", "hebrew.json", "greek-lemma-map.json"))
     return all(corpus.has_book(name, b.osis) for b in _expected_books(name))
 

@@ -17,6 +17,8 @@ def test_help_documents_current_search_and_command_editor_contract(lang):
                   "End", "Ctrl-E", "Backspace", "Delete", "Ctrl-U", "Ctrl-K"):
         assert token in text
     assert ("currently enabled" in text if lang == "en" else "当前已启用" in text)
+    assert ("total hit count" in text and "count for each translation" in text
+            if lang == "en" else "总命中数" in text and "各译本命中数" in text)
     assert ("absolute" in text if lang == "en" else "绝对路径" in text)
     assert ("Hebrew" in text and "right edge" in text if lang == "en" else
             "希伯来文" in text and "右边缘" in text)
@@ -72,16 +74,18 @@ def test_help_documents_chapter_fast_nav_and_copy_keys(lang):
         assert token in text
     if lang == "en":
         assert "previous chapter" in text and "next chapter" in text
-        assert "five" in text and "copy" in text
+        assert "move the focus five verses" in text and "copy" in text
+        assert "visually unhighlighted" in text and "immediately" in text
     else:
         assert "上一章" in text and "下一章" in text
-        assert "五项" in text and "复制" in text
+        assert "移动五节" in text and "复制" in text
+        assert "不显示高亮" in text and "立即跟随" in text
 
 
 @pytest.mark.parametrize("lang", ["en", "zh"])
 def test_help_documents_optional_vim_note_copy_paste(lang):
     text = "\n".join(line for line, _kind in tui.help_lines(lang))
-    for token in ("yy", "v/V", "p/P", ":wq", ":q!", ":q", "ZZ", "ZQ"):
+    for token in ("yy", "v/V", "p/P", ":wq", ":q!", ":!q", ":q", "ZZ", "ZQ"):
         assert token in text
     if lang == "en":
         assert "Normal mode" in text and "unchanged note" in text
@@ -99,9 +103,13 @@ def test_help_documents_find_navigation_keys(lang):
                         text.find("Corpus search" if lang == "en" else "语料库搜索")]
     if lang == "en":
         assert "n / Down" in find_section and "N / Up" in find_section
+        assert "move five matches" in find_section
+        assert "first / last match" in find_section
         assert "j / Down" not in find_section
     else:
         assert "n / 下方向键" in find_section and "N / 上方向键" in find_section
+        assert "移动五个匹配" in find_section
+        assert "第一个 / 最后一个匹配" in find_section
         assert "j / 下方向键" not in find_section
 
 

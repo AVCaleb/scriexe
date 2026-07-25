@@ -64,6 +64,22 @@ def corpus_dirs() -> list[Path]:
     return list(dict.fromkeys(dirs))
 
 
+def strongs_path(filename: str) -> Path:
+    """Find a file in the strongs data directory, checking bundled then user dirs."""
+    relative = Path("strongs") / filename
+    return next((d / relative for d in corpus_dirs() if (d / relative).exists()),
+                corpus_dir() / relative)
+
+
+def strongs_dir() -> Path:
+    """Return the first existing strongs directory (bundled or user), else user dir."""
+    for d in corpus_dirs():
+        candidate = d / "strongs"
+        if candidate.is_dir():
+            return candidate
+    return corpus_dir() / "strongs"
+
+
 def cache_dir() -> Path:
     p = root() / "data" / "cache"
     p.mkdir(parents=True, exist_ok=True)

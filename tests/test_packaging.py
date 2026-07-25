@@ -8,21 +8,33 @@ from exeg import canon
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_core_staging_copies_only_cuvs_and_asv(tmp_path):
+def test_core_staging_copies_cuvs_asv_and_study_data(tmp_path):
     source = tmp_path / "source"
     for version in ("cuvs", "asv"):
         d = source / "data" / "corpus" / version
         d.mkdir(parents=True)
         for book in canon.BOOKS:
             (d / f"{book.osis}.tsv").write_text("1\t1\ttest\n", encoding="utf-8")
+    # Create minimal sblgnt (NT) and wlc (OT) word data
+    for version, books in (("sblgnt", canon.NT_BOOKS), ("wlc", [b for b in canon.BOOKS if not b.nt])):
+        d = source / "data" / "corpus" / version
+        d.mkdir(parents=True)
+        for book in books:
+            (d / f"{book.osis}.tsv").write_text("1\t1\t1\tword\tlemma\tG1\tN\n", encoding="utf-8")
+    # Create minimal Strong's data
+    sdir = source / "data" / "corpus" / "strongs"
+    sdir.mkdir(parents=True)
+    for fname in ("greek.json", "hebrew.json", "greek-lemma-map.json"):
+        (sdir / fname).write_text("{}", encoding="utf-8")
     forbidden = source / "data" / "corpus" / "nasb95"
     forbidden.mkdir(parents=True)
     (forbidden / "Gen.tsv").write_text("licensed", encoding="utf-8")
     out = tmp_path / "core"
     subprocess.run([sys.executable, str(ROOT / "packaging" / "build_core_data.py"),
                     "--source-root", str(source), "--output", str(out)], check=True)
-    assert {p.name for p in (out / "data" / "corpus").iterdir()} == {"cuvs", "asv"}
+    assert {p.name for p in (out / "data" / "corpus").iterdir()} == {"cuvs", "asv", "sblgnt", "wlc", "strongs"}
     assert len(list((out / "data" / "corpus" / "cuvs").glob("*.tsv"))) == 66
+    assert (out / "data" / "corpus" / "strongs" / "greek.json").exists()
     assert not (out / "data" / "corpus" / "nasb95").exists()
 
 

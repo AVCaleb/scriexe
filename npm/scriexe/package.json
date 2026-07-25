@@ -1,6 +1,6 @@
 {
   "name": "scriexe",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Standalone installer and launcher for the exeg terminal Bible-exegesis workspace",
   "repository": {
     "type": "git",
@@ -18,10 +18,10 @@
     "node": ">=18"
   },
   "optionalDependencies": {
-    "scriexe-darwin-arm64": "0.1.0",
-    "scriexe-darwin-x64": "0.1.0",
-    "scriexe-linux-arm64": "0.1.0",
-    "scriexe-linux-x64": "0.1.0",
-    "scriexe-windows-x64": "0.1.0"
+    "scriexe-darwin-arm64": "0.2.0",
+    "scriexe-darwin-x64": "0.2.0",
+    "scriexe-linux-arm64": "0.2.0",
+    "scriexe-linux-x64": "0.2.0",
+    "scriexe-windows-x64": "0.2.0"
   }
 }

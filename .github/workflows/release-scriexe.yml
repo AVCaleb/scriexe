@@ -62,7 +62,7 @@ jobs:
         shell: bash
         run: |
           for attempt in 1 2 3; do
-            exeg fetch --only ebible --versions cuvs,asv && exit 0
+            exeg fetch --only strongs,sblgnt,wlc,ebible --versions cuvs,asv && exit 0
             if [[ "$attempt" == 3 ]]; then exit 1; fi
             echo "core fetch attempt $attempt failed; retrying retained downloads..."
             sleep $((attempt * 10))
