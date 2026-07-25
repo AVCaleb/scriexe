@@ -82,10 +82,28 @@ def test_help_documents_chapter_fast_nav_and_copy_keys(lang):
 @pytest.mark.parametrize("lang", ["en", "zh"])
 def test_help_documents_optional_vim_note_copy_paste(lang):
     text = "\n".join(line for line, _kind in tui.help_lines(lang))
-    for token in ("yy", "v/V", "p/P", ":wq", ":q!", "ZZ", "ZQ"):
+    for token in ("yy", "v/V", "p/P", ":wq", ":q!", ":q", "ZZ", "ZQ"):
         assert token in text
+    if lang == "en":
+        assert "Normal mode" in text and "unchanged note" in text
+    else:
+        assert "普通模式" in text and "未修改" in text
     assert ("disabled by default" in text if lang == "en" else "默认关闭" in text)
     assert ("system clipboard" in text if lang == "en" else "系统剪贴板" in text)
+
+
+@pytest.mark.parametrize("lang", ["en", "zh"])
+def test_help_documents_find_navigation_keys(lang):
+    text = "\n".join(line for line, _kind in tui.help_lines(lang))
+    # find-in-preview uses n/N, not j/k
+    find_section = text[text.find("Find in preview" if lang == "en" else "当前预览内查找"):
+                        text.find("Corpus search" if lang == "en" else "语料库搜索")]
+    if lang == "en":
+        assert "n / Down" in find_section and "N / Up" in find_section
+        assert "j / Down" not in find_section
+    else:
+        assert "n / 下方向键" in find_section and "N / 上方向键" in find_section
+        assert "j / 下方向键" not in find_section
 
 
 def test_help_status_promises_only_keys_handled_by_help_mode():

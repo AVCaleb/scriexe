@@ -191,6 +191,12 @@ def _surface(w: corpus.Word) -> str:
     return w.surface.replace("/", "")
 
 
+def _reference_label(book: canon.Book, chapter: int, verse: int, lang: str) -> str:
+    """A verse reference shown in only the active interface language."""
+    name = (book.en if lang == "en" else book.zh_abbr)
+    return f"{name} {chapter}:{verse}"
+
+
 def _word_versions() -> list[str]:
     return ["sblgnt", "wlc"]
 
@@ -401,8 +407,7 @@ class Controller:
         ref = refs.Ref(book, n.chapter, n.verse, n.chapter, n.verse)
         versions = self.effective_versions()
         texts, _notices = _gather(ref, versions)
-        lines = [f"{book.en} {n.chapter}:{n.verse} · "
-                 f"{book.zh_abbr} {n.chapter}:{n.verse}"]
+        lines = [_reference_label(book, n.chapter, n.verse, self.lang)]
         for version in versions:
             text = texts.get(version, {}).get((n.chapter, n.verse))
             if text:
@@ -413,7 +418,7 @@ class Controller:
     def copy_highlighted_verse(self):
         n = self.shown()
         ok, error = _copy_clipboard(self.highlighted_verse_text())
-        ref = f"{n.book().en} {n.chapter}:{n.verse}"
+        ref = _reference_label(n.book(), n.chapter, n.verse, self.lang)
         self.message = (tr(self.lang, "copied_verse", ref=ref) if ok else
                         tr(self.lang, "copy_failed", e=error))
 
@@ -802,8 +807,9 @@ class Controller:
             note_mark = ""
             if self.show_verse_marks and notes.has_verse_note(ref.book.osis, ch, v):
                 note_mark = (self.notemark + " ") if self.notemark else ""
-            hdr = f"{note_mark}{ref.book.en} {ch}:{v} · {ref.book.zh_abbr} {ch}:{v}"
-            lines.append((hdr, KIND_FOCUS if is_focus else
+            hdr = f"{note_mark}{_reference_label(ref.book, ch, v, self.lang)}"
+            is_highlighted = is_focus and self.scope != "chapter"
+            lines.append((hdr, KIND_FOCUS if is_highlighted else
                           (KIND_DIM if self.scope == "window" else KIND_HEADER)))
             for version in vers:
                 if version not in texts:
@@ -811,7 +817,7 @@ class Controller:
                 label = display.LABELS.get(version, version.upper())
                 text = texts[version].get((ch, v))
                 body = text if text else f"[not in {label}]"
-                kind = (KIND_FOCUS if is_focus else
+                kind = (KIND_FOCUS if is_highlighted else
                         (KIND_DIM if self.scope == "window" else KIND_NORMAL))
                 if version == "wlc":
                     kind = RTL_PREFIX + kind
@@ -821,11 +827,11 @@ class Controller:
             ntext = notes.read_verse(ref.book.osis, n.chapter, n.verse)
             lines.append(("", KIND_NOTE))
             if ntext:
-                lines.append((f"  {tr(self.lang, 'note_word')}({ref.book.zh_abbr} {n.chapter}:{n.verse}):", KIND_NOTE))
+                lines.append((f"  {tr(self.lang, 'note_word')}({_reference_label(ref.book, n.chapter, n.verse, self.lang)}):", KIND_NOTE))
                 for ln in ntext.rstrip("\n").splitlines():
                     lines.append((f"    {ln}", KIND_NOTE))
             else:
-                lines.append((f"  {tr(self.lang, 'note_word')}({ref.book.zh_abbr} {n.chapter}:{n.verse}): {tr(self.lang, 'note_edit_prompt')}",
+                lines.append((f"  {tr(self.lang, 'note_word')}({_reference_label(ref.book, n.chapter, n.verse, self.lang)}): {tr(self.lang, 'note_edit_prompt')}",
                               KIND_NOTE))
         return lines, focus_line
 
@@ -839,10 +845,11 @@ class Controller:
         lemma = r.get("lemma", "")
         strongs = r.get("strongs", "")
         gloss = r.get("gloss", "")
-        lines.append((f"{b.en} {n.chapter}:{n.verse} · {tr(self.lang, 'word_study')} · {lemma} ({strongs or '?'})",
+        lines.append((f"{_reference_label(b, n.chapter, n.verse, self.lang)} · {tr(self.lang, 'word_study')} · {lemma} ({strongs or '?'})",
                       KIND_HEADER))
         if gloss:
-            lines.append((f"  " + tr(self.lang, "gloss") + f": {gloss}", KIND_LABEL))
+            lines.append((f"  " + tr(self.lang, "gloss")
+                         + f": {gloss}" + tr(self.lang, "gloss_source"), KIND_LABEL))
         words = corpus.get_words(vref, ORIG["nt" if b.nt else "ot"])
         toks = [f"[{_surface(w)}]" if w.idx == widx else _surface(w) for w in words]
         if toks:
@@ -870,12 +877,13 @@ class Controller:
         occ = r.get("occurrences", [])
         lines.append(("", KIND_NOTE))
         lines.append(("  " + tr(self.lang, "occurrences", n=len(occ)), KIND_LABEL))
+        occurrence_start = len(lines)
         for i, (ver, osis, ch, v, surface, morph) in enumerate(occ):
             mark = "▶" if i == self.word_cursor else " "
             mlbl = search.greek_morph_label(morph)
             lines.append((f" {mark} {osis} {ch}:{v}  {surface}  ({mlbl})",
                           KIND_OCCUR_SEL if i == self.word_cursor else KIND_OCCUR))
-        return lines, 2
+        return lines, (occurrence_start + self.word_cursor if occ else 2)
 
     def editor_lines(self) -> list[tuple[str, str]]:
         """Lines for the bottom editor pane (header + note buffer)."""
@@ -1166,7 +1174,7 @@ class Controller:
         self.note_cy = 0
         self.note_cx = 0
         self.note_dirty = False
-        self.note_mode = "insert"
+        self.note_mode = "normal" if self.vim_keys else "insert"
         self.note_anchor = None
         self.note_pending = ""
         self.editing = True
@@ -1542,13 +1550,13 @@ $ Esc          save and leave the inline editor
 $ Ctrl-C       discard this editing session
 $ Arrow keys   move the inline editor cursor
 Notes are stored as local Markdown files. A pencil mark identifies verses that already have notes.
-Optional Vim-style note keys are disabled by default and can be enabled in Settings for the inline editor. Insert, Normal, and Visual modes make system clipboard copy and paste convenient: yy copies a line; v/V selects and y copies; p/P pastes; :wq or ZZ saves; :q! or ZQ discards.
+Optional Vim-style note keys are disabled by default and can be enabled in Settings for the inline editor. The note opens in Normal mode, so you can yank text without typing: press i/a to insert, Esc to return to Normal. Normal/Visual modes make system clipboard copy and paste convenient: yy copies a line; v/V selects and y copies; p/P pastes; :wq or ZZ saves; :q! or ZQ discards; :q leaves an unchanged note without saving.
 For IME-heavy Chinese input, use :set editor popup. The popup editor accepts normal terminal input and ignores Vim-style keys; press Ctrl-D to finish or Ctrl-C to cancel. A blank submission keeps the existing note.
 
 # Find in preview
 Press / in ordinary verse view with NAV closed to search the currently rendered translations and visible notes. This is a literal, case-insensitive search rather than a regular expression. It never searches old Results, Help, Settings, Word, or NAV content.
-$ j / Down    move to the next match
-$ k / Up      move to the previous match
+$ n / Down    move to the next match
+$ N / Up      move to the previous match
 $ Enter       accept the current viewport and clear highlighting
 $ Esc         clear find and resume normal verse navigation
 Submitting an empty pattern also clears find.
@@ -1679,13 +1687,13 @@ $ Esc          保存并退出内嵌编辑器
 $ Ctrl-C       放弃本次编辑
 $ 方向键       移动内嵌编辑器光标
 笔记以本地 Markdown 文件保存。已有笔记的经节旁会显示铅笔标记。
-可选的 Vim 风格笔记键位默认关闭，可在设置页为内嵌编辑器启用。Insert、Normal 和 Visual 模式便于使用系统剪贴板复制粘贴：yy 复制整行；v/V 选择后按 y 复制；p/P 粘贴；:wq 或 ZZ 保存；:q! 或 ZQ 放弃。
+可选的 Vim 风格笔记键位默认关闭，可在设置页为内嵌编辑器启用。笔记以普通模式打开，可直接抽取文本而无需进入插入：按 i/a 插入，Esc 回到普通模式。普通与可视模式便于使用系统剪贴板复制粘贴：yy 复制整行；v/V 选择后按 y 复制；p/P 粘贴；:wq 或 ZZ 保存；:q! 或 ZQ 放弃；:q 在未修改时直接退出不保存。
 中文输入法较多时，可使用 :set editor popup。弹出编辑器使用普通终端输入且忽略 Vim 键位；Ctrl-D 完成，Ctrl-C 取消；空白提交会保留原笔记。
 
 # 当前预览内查找
 在普通经文视图且导航器关闭时，按 / 查找当前已渲染的译本和可见笔记。这是忽略大小写的字面查找，不是正则表达式；它绝不会搜索旧结果、帮助、设置、词汇或导航内容。
-$ j / 下方向键    下一个匹配
-$ k / 上方向键    上一个匹配
+$ n / 下方向键    下一个匹配
+$ N / 上方向键    上一个匹配
 $ Enter            接受当前滚动位置并清除高亮
 $ Esc              清除查找，恢复普通经节导航
 提交空内容也会清除查找。
@@ -2209,6 +2217,11 @@ def _status(c: Controller) -> str:
     mode = "NAV" if c.nav_visible else ("WORD" if c.view == "word" else
                                         ("RESULT" if c.view == "result" else
                                          ("SETTINGS" if c.view == "settings" else "NORMAL")))
+    find_active = (c.find_pat and c.find_allowed() and c.find_hits
+                   and c.find_idx >= 0)
+    if find_active and mode == "NORMAL":
+        msg = (c.message + " · ") if c.message else ""
+        return f" {msg}FIND · {tr(c.lang, 'find_hint')}"
     hint = {
         "NAV": tr(c.lang, "nav_hint"),
         "NORMAL": tr(c.lang, "normal_hint"),
@@ -2311,7 +2324,7 @@ def _wrap_plain(text: str, width: int) -> list[str]:
 def _wrap_one(text, width):
     """Cell-aware wrapping with a hanging indent for translation bodies."""
     width = max(1, width)
-    match = re.match(r"^(  \S+ {2,})(\S.*)$", text)
+    match = re.match(r"^(  \S+ +)(\S.*)$", text)
     if match:
         prefix, body = match.groups()
         indent_width = _cell_width(prefix)
@@ -2323,17 +2336,21 @@ def _wrap_one(text, width):
 
 
 def _wrap_rtl_version(text: str, width: int) -> list[str]:
-    """Keep the version label left while aligning Hebrew body rows right."""
+    """Keep the version label left (first row only) while aligning Hebrew body
+    rows right; continuation rows use a blank label area of equal width."""
     width = max(1, width)
-    match = re.match(r"^(  \S+ {2,})(\S.*)$", text)
+    match = re.match(r"^(  \S+ +)(\S.*)$", text)
     if match:
         prefix, body = match.groups()
         prefix_width = _cell_width(prefix)
         if prefix_width < width:
             body_width = width - prefix_width
             chunks = _wrap_plain(body, body_width)
-            return [prefix + " " * max(0, body_width - _cell_width(chunk)) + chunk
-                    for chunk in chunks]
+            blank = " " * prefix_width
+            out = [prefix + " " * max(0, body_width - _cell_width(chunks[0])) + chunks[0]]
+            for chunk in chunks[1:]:
+                out.append(blank + " " * max(0, body_width - _cell_width(chunk)) + chunk)
+            return out
     chunks = _wrap_plain(text, width)
     return [" " * max(0, width - _cell_width(chunk)) + chunk for chunk in chunks]
 
@@ -2549,6 +2566,11 @@ def _handle_vim_note_key(screen, c: Controller, ch) -> None:
             c.end_edit(save=True)
         elif command == "q!":
             c.end_edit(save=False)
+        elif command == "q":
+            if c.note_dirty:
+                c.message = tr(c.lang, "note_unsaved")
+            else:
+                c.end_edit(save=False)
         elif command is not None:
             c.message = f"unknown note command: {command}"
 
@@ -2744,10 +2766,10 @@ def _handle(screen, c: Controller, key, scroll, lines, focus_line, body_h) -> in
             c.find_target_line = c.find_hits[c.find_idx] if c.find_hits else None
         return 0
     if c.find_pat and c.find_allowed():
-        if k in (ord("j"), curses.KEY_DOWN):
+        if k in (ord("n"), curses.KEY_DOWN):
             c.find_target_line = c.find_next(1)
             return 0
-        if k in (ord("k"), curses.KEY_UP):
+        if k in (ord("N"), curses.KEY_UP):
             c.find_target_line = c.find_next(-1)
             return 0
         if k in (10, 13, curses.KEY_ENTER):

@@ -70,7 +70,15 @@ def search_text(pattern, versions, book=None, lemma=False):
                 for chapter, verse, text in verses:
                     if rx.search(text):
                         hits.append((version, osis, chapter, verse, text))
-    return hits
+    return _sort_hits(hits, versions)
+
+
+def _sort_hits(hits, versions):
+    """Order hits by canonical book/chapter/verse, then the caller's version order."""
+    book_rank = {b.osis: i for i, b in enumerate(canon.BOOKS)}
+    ver_rank = {v: i for i, v in enumerate(versions)}
+    return sorted(hits, key=lambda h: (book_rank.get(h[1], len(canon.BOOKS)),
+                                       h[2], h[3], ver_rank.get(h[0], len(versions))))
 
 
 def word_occurrences(query: str) -> dict:

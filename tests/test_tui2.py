@@ -113,10 +113,18 @@ def test_nav_ctrl_u_ctrl_d_move_five_items(tmp_notes):
 def test_highlighted_verse_text_contains_reference_and_visible_versions(tmp_notes):
     c = tui.Controller(intro=True)
     c.nav_visible = False
+    c.lang = "en"
     c.translations = ["cuvs", "asv"]
     text = c.highlighted_verse_text()
-    assert text.startswith("Matthew 1:1 · 太 1:1")
-    assert "和合本" in text and "ASV" in text
+    first = text.splitlines()[0]
+    assert first == "Matthew 1:1"              # English mode omits the Chinese ref
+    assert "太" not in text and "和合本" in text and "ASV" in text
+
+    c.lang = "zh"
+    text_zh = c.highlighted_verse_text()
+    first_zh = text_zh.splitlines()[0]
+    assert first_zh == "太 1:1"                # Chinese mode omits the English ref
+    assert "Matthew" not in text_zh
 
 
 def test_nav_copy_formats_preview_selection(tmp_notes):
@@ -281,6 +289,36 @@ def test_rtl_version_body_wraps_and_right_aligns_each_row():
     assert rows[-1][0].endswith("יכל")
 
 
+def test_rtl_continuation_rows_do_not_repeat_label():
+    body = "אבג דהו זחט יכל מנס עפץ קרש ת" * 3   # forces several wrapped rows
+    text = tui._version_line("WLC", body)
+    rows, _ = tui._build_rows([(text, tui.RTL_PREFIX + tui.KIND_NORMAL)],
+                              30, color=True, wrap=True)
+    assert len(rows) >= 3
+    labels = [r for r, _ in rows if "WLC" in r]
+    assert len(labels) == 1                     # exactly one label, on the first row
+    assert "WLC" in rows[0][0]
+    # continuation rows start at the body column (blank prefix), right-aligned
+    for row, _kind in rows[1:]:
+        assert "WLC" not in row
+        assert row.startswith("  " + " " * 7)     # blank label area, body right-aligned
+        assert tui._cell_width(row) == 30
+
+
+def test_vulgate_wrapped_continuation_uses_hanging_indent():
+    body = ("Ipse vocabatur Elimelech, et uxor ejus Noëmi : et duo filii, "
+            "alter Mahalon, et alter Chelion, Ephrathæi de Bethlehem Juda. "
+            "Ingressique regionem Moabitidem, morabantur ibi.")
+    text = tui._version_line("Vulgate", body)
+    rows, _ = tui._build_rows([(text, tui.KIND_NORMAL)], 50, color=True, wrap=True)
+    assert len(rows) >= 2
+    assert "Vulgate" in rows[0][0]               # label on the first row only
+    body_col = 10                                # "  " + 7-wide label + " "
+    for row, _kind in rows[1:]:
+        assert "Vulgate" not in row
+        assert row.startswith(" " * body_col)    # hanging indent at the body column
+
+
 def test_non_hebrew_translation_keeps_normal_left_aligned_kind():
     c = make_controller()
     c.nav_visible = False
@@ -352,6 +390,35 @@ def test_word_cursor_moves_and_jumps():
     c.jump_word_cursor()
     assert c.view == "verse"
     assert c.word_idx is None
+
+
+def test_word_view_focus_follows_cursor(tmp_notes):
+    c = make_controller()
+    _drill_to_1pet_3_18_word(c, 7)
+    c.commit()
+    occ = c.word_result["occurrences"]
+    assert len(occ) > 1
+    lines, focus0 = c.render_content()
+    c.move_word_cursor(1)
+    lines, focus1 = c.render_content()
+    assert focus1 > focus0                # selection moved down, focus followed
+    assert "▶" in lines[focus1][0]
+    c.move_word_cursor(-1)
+    _, focus2 = c.render_content()
+    assert focus2 == focus0
+
+
+def test_word_view_gloss_labels_strongs_source(tmp_notes):
+    for lang in ("en", "zh"):
+        c = make_controller()
+        c.lang = lang
+        _drill_to_1pet_3_18_word(c, 7)
+        c.commit()
+        lines, _ = c.render_content()
+        gloss_lines = [t for t, _ in lines if "gloss" in t or "释义" in t]
+        assert gloss_lines, "gloss row missing"
+        assert any("OpenScriptures Strong" in t for t in gloss_lines), \
+            f"{lang}: gloss lacks source attribution"
 
 
 def test_exit_word_view():
@@ -489,8 +556,25 @@ def vim_editor_controller():
     return c
 
 
-def test_vim_escape_enters_normal_and_i_a_return_to_insert(tmp_notes):
+def test_begin_edit_starts_in_normal_when_vim_keys_enabled(tmp_notes):
     c = vim_editor_controller()
+    assert c.editing is True and c.note_mode == "normal"
+    assert c.note_dirty is False
+
+
+def test_begin_edit_starts_in_insert_without_vim_keys(tmp_notes):
+    c = make_controller()
+    c.commit()
+    c.vim_keys = False
+    c.begin_edit()
+    assert c.note_mode == "insert"
+
+
+def test_vim_i_then_escape_returns_to_normal_and_clamps_cursor(tmp_notes):
+    c = vim_editor_controller()
+    assert c.note_mode == "normal"
+    tui._handle_vim_note_key(None, c, "i")
+    assert c.note_mode == "insert"
     c.insert_char("abc")
     tui._handle_vim_note_key(None, c, "\x1b")
     assert c.editing is True and c.note_mode == "normal"
@@ -500,6 +584,31 @@ def test_vim_escape_enters_normal_and_i_a_return_to_insert(tmp_notes):
     tui._handle_vim_note_key(None, c, "\x1b")
     tui._handle_vim_note_key(None, c, "a")
     assert c.note_mode == "insert" and c.note_cx == 3
+
+
+def test_vim_clean_colon_q_exits_without_saving(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    assert c.note_dirty is False
+    monkeypatch.setattr(tui, "_prompt_line",
+                        lambda _screen, _prefix, _history: "q")
+    tui._handle_vim_note_key(None, c, ":")
+    assert c.editing is False
+    assert "" == notes.read_verse("1Pet", 3, 18) or notes.read_verse("1Pet", 3, 18) == ""
+
+
+def test_vim_dirty_colon_q_keeps_editor_open_with_guidance(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["changed"]
+    c.note_dirty = True
+    monkeypatch.setattr(tui, "_prompt_line",
+                        lambda _screen, _prefix, _history: "q")
+    tui._handle_vim_note_key(None, c, ":")
+    assert c.editing is True            # stayed open
+    assert c.note_dirty is True
+    msg = c.message
+    assert ":wq" in msg and ":q!" in msg
+    # the note was not written
+    assert "changed" not in notes.read_verse("1Pet", 3, 18)
 
 
 def test_vim_normal_movement_supports_hjkl_zero_dollar_gg_G(tmp_notes):
@@ -902,7 +1011,7 @@ def test_find_is_scoped_to_plain_verse_preview():
     assert c.find("match") == 0
 
 
-def test_active_find_uses_jk_and_enter_or_escape_clears():
+def test_active_find_uses_nN_and_enter_or_escape_clears():
     c = make_controller()
     c.view = "verse"
     c.nav_visible = False
@@ -910,9 +1019,9 @@ def test_active_find_uses_jk_and_enter_or_escape_clears():
     c.find_hits = [2, 4]
     c.find_idx = 0
     original_focus = c.focus
-    tui._handle(None, c, ord("j"), 0, [], -1, 20)
+    tui._handle(None, c, ord("n"), 0, [], -1, 20)
     assert c.find_idx == 1 and c.focus == original_focus
-    tui._handle(None, c, ord("k"), 0, [], -1, 20)
+    tui._handle(None, c, ord("N"), 0, [], -1, 20)
     assert c.find_idx == 0
     tui._handle(None, c, 10, 0, [], -1, 20)
     assert c.find_pat == "" and c.find_hits == []
@@ -920,6 +1029,35 @@ def test_active_find_uses_jk_and_enter_or_escape_clears():
     c.find_pat, c.find_hits, c.find_idx = "again", [3], 0
     tui._handle(None, c, 27, 0, [], -1, 20)
     assert c.find_pat == "" and c.find_hits == []
+
+
+def test_active_find_status_shows_find_specific_hints():
+    c = make_controller()
+    c.lang = "en"
+    c.view = "verse"
+    c.nav_visible = False
+    c.find_pat = "match"
+    c.find_hits = [2, 4]
+    c.find_idx = 0
+    status = tui._status(c)
+    assert "FIND" in status
+    assert "n" in status and "N" in status and "Enter" in status and "Esc" in status
+    # ordinary reading commands are not advertised while find is active
+    for token in ("j/k verse", "Tab nav", "z scope", "+/-"):
+        assert token not in status
+
+
+def test_normal_hint_describes_bookmark_and_gG_separately():
+    c = make_controller()
+    c.lang = "en"
+    c.nav_visible = False
+    status = tui._status(c)
+    assert "p set" in status or "p set bookmark" in status
+    assert "b back" in status or "b return" in status
+    assert "p" in status and "b" in status
+    # b and p are described as distinct commands, not a combined token
+    assert "b/p" not in status
+    assert "g/G" in status or "g" in status
 
 
 def test_opening_help_clears_find_and_has_help_only_status():

@@ -185,14 +185,16 @@ def test_render_content_window_scope_has_focus_and_dim():
     assert any("3:18" in t and k == tui.KIND_FOCUS for t, k in lines)
 
 
-def test_render_content_chapter_scope_no_dim():
+def test_render_content_chapter_scope_no_dim_or_focus_highlight():
     c = make_controller()
     c.commit()
     c.scope = "chapter"
-    lines, _ = c.render_content()
+    lines, focus_line = c.render_content()
     kinds = {k for _, k in lines}
     assert tui.KIND_DIM not in kinds
-    assert tui.KIND_FOCUS in kinds
+    assert tui.KIND_FOCUS not in kinds        # chapter scope does not highlight
+    assert focus_line >= 0                     # still tracks the current verse
+    assert "3:18" in lines[focus_line][0]
 
 
 def test_render_content_verse_scope_has_note_strip():
@@ -201,6 +203,44 @@ def test_render_content_verse_scope_has_note_strip():
     c.scope = "verse"
     lines, _ = c.render_content()
     assert any(k == tui.KIND_NOTE for _, k in lines)
+
+
+def test_en_heading_omits_chinese_reference():
+    c = make_controller()
+    c.commit()
+    c.lang = "en"
+    c.scope = "chapter"
+    lines, _ = c.render_content()
+    heading = next(t for t, k in lines if "3:18" in t and k == tui.KIND_HEADER)
+    assert heading.startswith("1 Peter 3:18")
+    assert "·" not in heading and "彼前" not in heading
+
+
+def test_zh_heading_omits_english_reference():
+    c = make_controller()
+    c.commit()
+    c.lang = "zh"
+    c.scope = "chapter"
+    lines, _ = c.render_content()
+    heading = next(t for t, k in lines if "3:18" in t and k == tui.KIND_HEADER)
+    assert heading.startswith("彼前 3:18")
+    assert "1 Peter" not in heading and "·" not in heading
+
+
+def test_reading_g_jumps_to_first_verse_of_chapter():
+    c = make_controller()
+    c.commit()
+    c.move_focus(2)                       # away from 3:18
+    tui._handle(None, c, ord("g"), 0, [], -1, 20)
+    assert c.focus.verse == 1
+
+
+def test_reading_G_jumps_to_last_verse_of_chapter():
+    c = make_controller()
+    c.commit()
+    tui._handle(None, c, ord("G"), 0, [], -1, 20)
+    last = c.verse_list()[-1]
+    assert (c.focus.chapter, c.focus.verse) == last
 
 
 # ---- commands ----
