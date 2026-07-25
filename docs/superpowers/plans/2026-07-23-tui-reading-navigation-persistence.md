@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make scriexe retain the user's reading position, start new users at Matthew 1:1, provide faster chapter/NAV movement and verse copying, keep Settings selections visible, and render every Scripture character.
+**Goal:** Make scriexe retain the user's reading position, start new users at Matthew 1:1, provide faster chapter/NAV movement and verse copying, offer an opt-in Vim-style note copy/paste keymap, keep Settings selections visible, and render every Scripture character.
 
 **Architecture:** Keep behavior in the existing pure `Controller` and small module-level terminal adapters. Persist a validated `last_read` object by merging `notes/_meta.json`; reuse the current focus-line scrolling mechanism for selectable pages; fix clipping at the final drawing boundary rather than altering corpus text. Clipboard access remains dependency-free and platform-specific behind a testable helper.
 
@@ -14,7 +14,8 @@
 - Do not alter Scripture corpus text unless the source-to-normalized audit finds an independent mismatch.
 - `[` means previous chapter and `]` means next chapter; chapter jumps open verse 1 and cross canonical book boundaries.
 - NAV `Ctrl-U`/`Ctrl-D` moves exactly five items; outside NAV it retains half-screen scrolling.
-- `y` copies the highlighted single verse reference plus all displayed translations.
+- `y` copies the highlighted single verse reference plus all displayed translations outside note editing.
+- Optional Vim note keys are disabled by default and provide `yy`, Visual yank, and `p/P` system-clipboard paste only for the inline editor.
 - First-run fallback is Matthew 1:1; configured users restore only a valid committed `last_read` value.
 - No new runtime or packaging dependency.
 - Stop before package publication, release creation, tag push, or npm publish.
@@ -23,9 +24,9 @@
 
 ## File Structure
 
-- Modify `src/exeg/tui.py`: controller state, key routing, selected-line focus, clipboard adapter, drawing boundary, Help text.
-- Modify `src/exeg/i18n.py`: bilingual clipboard status and updated mode hints.
-- Modify `tests/test_tui2.py`: focused controller, renderer, clipboard, persistence, and key-routing regressions.
+- Modify `src/exeg/tui.py`: controller state, key routing, selected-line focus, bidirectional clipboard adapter, optional Vim note modes, drawing boundary, Help text.
+- Modify `src/exeg/i18n.py`: bilingual clipboard/Vim status, Settings explanation, and updated mode hints.
+- Modify `tests/test_tui2.py`: focused controller, renderer, clipboard, persistence, Vim note editing, and key-routing regressions.
 - Modify `tests/test_help_contract.py`: externally documented shortcut contract.
 - Use `docs/superpowers/specs/2026-07-23-tui-reading-navigation-persistence-design.md` as the approved behavior source.
 
@@ -557,7 +558,9 @@ git commit -m "fix: preserve wrapped Scripture characters"
 
 **Interfaces:**
 - Produces: `_clipboard_command(system=None, which=shutil.which) -> list[str] | None`
+- Produces: `_clipboard_read_command(system=None, which=shutil.which) -> list[str] | None`
 - Produces: `_copy_clipboard(text: str, ...) -> tuple[bool, str]`
+- Produces: `_read_clipboard(...) -> tuple[str | None, str]`
 - Produces: `Controller.highlighted_verse_text() -> str`, `Controller.copy_highlighted_verse() -> None`
 
 - [ ] **Step 1: Write failing formatting, adapter, and key tests**
@@ -593,6 +596,19 @@ def test_clipboard_command_mapping(system, available, expected):
     assert tui._clipboard_command(system, which) == expected
 
 
+@pytest.mark.parametrize("system, available, expected", [
+    ("Darwin", {"pbpaste"}, ["pbpaste"]),
+    ("Windows", {"powershell"}, ["powershell", "-NoProfile", "-Command",
+                                  "Get-Clipboard -Raw"]),
+    ("Linux", {"wl-paste"}, ["wl-paste", "--no-newline"]),
+    ("Linux", {"xclip"}, ["xclip", "-selection", "clipboard", "-o"]),
+    ("Linux", {"xsel"}, ["xsel", "--clipboard", "--output"]),
+])
+def test_clipboard_read_command_mapping(system, available, expected):
+    which = lambda name: f"/bin/{name}" if name in available else None
+    assert tui._clipboard_read_command(system, which) == expected
+
+
 def test_y_copies_highlighted_verse_without_shell(tmp_notes, monkeypatch):
     c = tui.Controller(intro=True)
     c.nav_visible = False
@@ -624,7 +640,7 @@ Expected: missing helper/method failures and no `y` action.
 
 - [ ] **Step 3: Implement platform clipboard adapter**
 
-Import `platform` and `shutil`. Implement command choice in priority order without shell invocation. `_copy_clipboard` calls:
+Import `platform` and `shutil`. Implement write and read command choice in the approved platform priority order without shell invocation. `_copy_clipboard` calls:
 
 ```python
 result = subprocess.run(command, input=text, text=True,
@@ -632,7 +648,7 @@ result = subprocess.run(command, input=text, text=True,
                         check=False)
 ```
 
-Return `(True, "")` only for exit code zero; return `(False, useful_message)` for no command, non-zero exit, or `OSError`.
+Return `(True, "")` only for exit code zero; return `(False, useful_message)` for no command, non-zero exit, or `OSError`. `_read_clipboard` runs the read command with `capture_output=True, text=True, check=False`, returning `(stdout, "")` on success and `(None, useful_message)` on failure.
 
 - [ ] **Step 4: Implement pure highlighted-verse formatting and controller action**
 
@@ -671,7 +687,292 @@ git add src/exeg/tui.py src/exeg/i18n.py tests/test_tui2.py
 git commit -m "feat: copy the highlighted verse"
 ```
 
-### Task 6: Bilingual Help Contract and Full Local Verification
+### Task 6: Opt-In Vim Note Copy/Paste Keymap
+
+**Files:**
+- Modify: `src/exeg/tui.py:207-224,461-582,965-1065,1745-1810,2112-2185`
+- Modify: `src/exeg/i18n.py:8-90`
+- Test: `tests/test_tui2.py`
+
+**Interfaces:**
+- Produces: persisted `Controller.vim_keys: bool`, default `False`
+- Produces: `Controller.note_mode` values `"insert" | "normal" | "visual" | "visual_line"`
+- Produces: `Controller.note_selection_range() -> tuple[tuple[int, int], tuple[int, int]] | None`
+- Produces: `Controller.yank_note_selection(linewise: bool = False) -> tuple[bool, str]`
+- Produces: `Controller.paste_note_text(text: str, before: bool = False, replace_selection: bool = False) -> None`
+- Preserves: current non-Vim inline editing and popup editing when the setting is disabled or inapplicable
+
+- [ ] **Step 1: Write failing Settings/default/persistence tests**
+
+```python
+def test_vim_note_keys_default_off_and_load_from_meta(tmp_notes):
+    assert tui.Controller(intro=True).vim_keys is False
+    notes.write_meta({"vim_keys": True})
+    assert tui.Controller().vim_keys is True
+
+
+def test_settings_explains_and_toggles_vim_note_keys(tmp_notes):
+    c = tui.Controller(intro=True)
+    c.open_settings()
+    items = c.settings_items()
+    index = next(i for i, item in enumerate(items) if item.get("key") == "vim_keys")
+    assert "copy" in items[index + 1]["label"].lower()
+    assert "paste" in items[index + 1]["label"].lower()
+    c.settings_cursor = index
+    c.toggle_settings()
+    assert c.vim_keys is True
+    assert notes.read_meta()["vim_keys"] is True
+```
+
+For the Chinese explanation, set `c.lang = "zh"` and assert `复制` and `粘贴` occur in the note immediately after the checkbox.
+
+- [ ] **Step 2: Run Settings tests and verify RED**
+
+```bash
+.venv/bin/pytest -q tests/test_tui2.py -k 'vim_note_keys or settings_explains'
+```
+
+Expected: `vim_keys` and its Settings item do not exist.
+
+- [ ] **Step 3: Implement the opt-in setting without changing default editing**
+
+Initialize and load:
+
+```python
+self.vim_keys = bool(m.get("vim_keys", False))
+self.note_mode = "insert"
+self.note_anchor: tuple[int, int] | None = None
+self.note_pending = ""
+```
+
+Add a Settings checkbox followed by a localized note:
+
+```python
+{"type": "bool", "key": "vim_keys", "value": "on",
+ "label": tr(self.lang, "vim_keys_label"), "active": self.vim_keys},
+{"type": "note", "label": tr(self.lang, "vim_keys_explain")},
+```
+
+Toggle `vim_keys`, include it in merged `_persist_meta`, and add `"vim_keys": False` to `DEFAULT_SETTINGS`. Add translations:
+
+```python
+"vim_keys_label": {"en": "Vim-style note keybindings",
+                   "zh": "Vim 风格笔记键位"},
+"vim_keys_explain": {
+    "en": "Optional: Normal/Visual navigation, selection, system clipboard copy and paste",
+    "zh": "可选：使用 Normal/Visual 导航、选择及系统剪贴板复制粘贴",
+},
+```
+
+Run the Step 2 command. Expected: PASS, while existing editor tests still pass unchanged.
+
+- [ ] **Step 4: Write failing mode-transition, movement, and exit tests**
+
+```python
+def vim_editor_controller():
+    c = make_controller()
+    c.commit()
+    c.vim_keys = True
+    c.begin_edit()
+    return c
+
+
+def test_vim_escape_enters_normal_and_i_a_return_to_insert(tmp_notes):
+    c = vim_editor_controller()
+    c.insert_char("abc")
+    tui._handle_vim_note_key(None, c, "\x1b")
+    assert c.editing is True and c.note_mode == "normal"
+    tui._handle_vim_note_key(None, c, "i")
+    assert c.note_mode == "insert"
+    tui._handle_vim_note_key(None, c, "\x1b")
+    tui._handle_vim_note_key(None, c, "a")
+    assert c.note_mode == "insert" and c.note_cx == 3
+
+
+def test_vim_normal_movement_supports_hjkl_zero_dollar_gg_G(tmp_notes):
+    c = vim_editor_controller()
+    c.note_lines = ["abc", "def", "ghi"]
+    c.note_cy, c.note_cx, c.note_mode = 1, 2, "normal"
+    for key in ("h", "0", "$", "j", "k"):
+        tui._handle_vim_note_key(None, c, key)
+    assert (c.note_cy, c.note_cx) == (1, 2)
+    tui._handle_vim_note_key(None, c, "g")
+    tui._handle_vim_note_key(None, c, "g")
+    assert c.note_cy == 0
+    tui._handle_vim_note_key(None, c, "G")
+    assert c.note_cy == 2
+
+
+def test_vim_ZZ_saves_and_ZQ_discards(tmp_notes):
+    c = vim_editor_controller()
+    c.note_lines = ["save me"]
+    c.note_mode = "normal"
+    tui._handle_vim_note_key(None, c, "Z")
+    tui._handle_vim_note_key(None, c, "Z")
+    assert c.editing is False
+    assert "save me" in notes.read_verse("1Pet", 3, 18)
+
+    c = vim_editor_controller()
+    c.note_lines = ["discard me"]
+    c.note_mode = "normal"
+    tui._handle_vim_note_key(None, c, "Z")
+    tui._handle_vim_note_key(None, c, "Q")
+    assert c.editing is False
+    assert "discard me" not in notes.read_verse("1Pet", 3, 18)
+```
+
+Test `:wq` and `:q!` by mocking `_prompt_line` to return each command when `:` is handled in Normal mode.
+
+- [ ] **Step 5: Run mode tests and verify RED**
+
+```bash
+.venv/bin/pytest -q tests/test_tui2.py -k 'vim_escape or vim_normal_movement or vim_ZZ or vim_colon'
+```
+
+Expected: Vim key handler and modes are missing.
+
+- [ ] **Step 6: Implement focused Vim mode dispatch**
+
+Keep the current `_edit_loop` code as the disabled/default path. When `c.vim_keys` is true and `_popup` is false, dispatch key input to `_handle_vim_note_key(screen, c, key)`.
+
+Implement:
+
+- Insert: preserve all existing character/newline/backspace/arrow behavior; Esc sets `note_mode="normal"` without ending edit.
+- Normal/Visual movement: `h/l` and Left/Right call `cursor_move(0, ±1)`; `j/k` and Up/Down call `cursor_move(±1, 0)`; `0` sets column zero; `$` sets column to current line length; pending `gg` moves to first line; `G` moves to last line.
+- `i` enters Insert at the current cursor; `a` advances one character when possible and enters Insert.
+- pending `ZZ` calls `end_edit(save=True)`; `ZQ` calls `end_edit(save=False)`.
+- `:` calls `_prompt_line`; `wq` saves/exits and `q!` discards/exits; unknown editor commands set a non-fatal message.
+- Popup mode continues through `_edit_popup` and never invokes Vim dispatch.
+
+Add localized mode/status strings and show `INSERT`, `NORMAL`, `VISUAL`, or `V-LINE` in the editor header/status. Run Step 5 and all existing editor tests. Expected: PASS.
+
+- [ ] **Step 7: Write failing `yy` and Visual selection yank tests**
+
+```python
+def test_vim_yy_copies_current_line(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["first", "second"]
+    c.note_cy, c.note_cx, c.note_mode = 1, 2, "normal"
+    copied = []
+    monkeypatch.setattr(tui, "_copy_clipboard",
+                        lambda text: (copied.append(text) or True, ""))
+    tui._handle_vim_note_key(None, c, "y")
+    tui._handle_vim_note_key(None, c, "y")
+    assert copied == ["second\n"]
+
+
+def test_vim_character_visual_yank_is_inclusive(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["alpha", "beta"]
+    c.note_cy, c.note_cx, c.note_mode = 0, 2, "normal"
+    copied = []
+    monkeypatch.setattr(tui, "_copy_clipboard",
+                        lambda text: (copied.append(text) or True, ""))
+    tui._handle_vim_note_key(None, c, "v")
+    tui._handle_vim_note_key(None, c, "l")
+    tui._handle_vim_note_key(None, c, "l")
+    tui._handle_vim_note_key(None, c, "y")
+    assert copied == ["pha"]
+    assert c.note_mode == "normal"
+
+
+def test_vim_line_visual_yank_includes_complete_lines(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["alpha", "beta", "gamma"]
+    c.note_cy, c.note_mode = 0, "normal"
+    copied = []
+    monkeypatch.setattr(tui, "_copy_clipboard",
+                        lambda text: (copied.append(text) or True, ""))
+    tui._handle_vim_note_key(None, c, "V")
+    tui._handle_vim_note_key(None, c, "j")
+    tui._handle_vim_note_key(None, c, "y")
+    assert copied == ["alpha\nbeta\n"]
+```
+
+Add a multi-line character selection case from `(0, 3)` through `(1, 1)` expecting `"ha\nbe"`.
+
+- [ ] **Step 8: Run yank tests and verify RED**
+
+```bash
+.venv/bin/pytest -q tests/test_tui2.py -k 'vim_yy or visual_yank'
+```
+
+Expected: no selection/yank behavior.
+
+- [ ] **Step 9: Implement selection ranges, visible highlighting, and yank**
+
+Store `note_anchor=(note_cy, note_cx)` on `v`/`V`. `note_selection_range` returns ordered anchor/cursor endpoints. Characterwise extraction is inclusive at both ends and joins crossed lines with `\n`; linewise extraction joins complete selected lines and appends a final newline.
+
+On successful `_copy_clipboard`, set `note_mode="normal"`, clear anchor/pending state, and show localized copied status. On failure keep the selection and show the adapter error.
+
+Add `_note_selected_spans(c) -> dict[int, tuple[int, int]]`, returning codepoint ranges per selected line. After drawing the editor pane, call `_highlight_note_selection`; convert codepoint prefixes to terminal cells with `_cell_width` and use `screen.stdscr.chgat(row, start_cell, max(1, length_cells), curses.A_REVERSE)` for visible selected spans. Catch `curses.error` so narrow panes remain safe.
+
+Run Step 8 plus renderer/editor tests. Expected: PASS.
+
+- [ ] **Step 10: Write failing Normal and Visual paste tests**
+
+```python
+def test_vim_p_and_P_paste_multiline_clipboard(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["abcd"]
+    c.note_cy, c.note_cx, c.note_mode = 0, 1, "normal"
+    monkeypatch.setattr(tui, "_read_clipboard", lambda: ("X\nY", ""))
+    tui._handle_vim_note_key(None, c, "p")
+    assert c.note_lines == ["abX", "Ycd"]
+
+    c.note_lines = ["abcd"]
+    c.note_cy, c.note_cx, c.note_mode = 0, 1, "normal"
+    tui._handle_vim_note_key(None, c, "P")
+    assert c.note_lines == ["aX", "Ybcd"]
+
+
+def test_vim_visual_p_replaces_selection(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["abcdef"]
+    c.note_cy, c.note_cx, c.note_mode = 0, 1, "normal"
+    monkeypatch.setattr(tui, "_read_clipboard", lambda: ("XY", ""))
+    tui._handle_vim_note_key(None, c, "v")
+    tui._handle_vim_note_key(None, c, "l")
+    tui._handle_vim_note_key(None, c, "l")
+    tui._handle_vim_note_key(None, c, "p")
+    assert c.note_lines == ["aXYef"]
+    assert c.note_mode == "normal"
+
+
+def test_vim_paste_failure_keeps_note_unchanged(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["unchanged"]
+    c.note_mode = "normal"
+    monkeypatch.setattr(tui, "_read_clipboard", lambda: (None, "clipboard unavailable"))
+    tui._handle_vim_note_key(None, c, "p")
+    assert c.note_lines == ["unchanged"]
+    assert "unavailable" in c.message
+```
+
+- [ ] **Step 11: Run paste tests and verify RED**
+
+```bash
+.venv/bin/pytest -q tests/test_tui2.py -k 'vim_p_and_P or visual_p or paste_failure'
+```
+
+Expected: no note paste behavior.
+
+- [ ] **Step 12: Implement clipboard insertion/replacement**
+
+Implement one text insertion helper that splits on `\n`, splices the first/last fragments into the surrounding line, inserts middle lines, and leaves the cursor at the end of pasted content. Normal `p` inserts at `min(len(line), note_cx + 1)` and `P` at `note_cx`.
+
+For Visual `p`, delete the inclusive character selection (or complete selected lines for `V`) and insert clipboard content at the selection start. Empty clipboard text is a no-op with localized feedback. Mark successful mutation `note_dirty=True`, return to Normal mode, and clear selection state.
+
+Run Step 11 and all note tests. Expected: PASS.
+
+- [ ] **Step 13: Commit the task**
+
+```bash
+git add src/exeg/tui.py src/exeg/i18n.py tests/test_tui2.py
+git commit -m "feat: add optional Vim note keybindings"
+```
+
+### Task 7: Bilingual Help Contract and Full Local Verification
 
 **Files:**
 - Modify: `src/exeg/tui.py:1241-1520`
@@ -695,6 +996,15 @@ def test_help_documents_chapter_fast_nav_and_copy_keys(lang):
     else:
         assert "上一章" in text and "下一章" in text
         assert "五项" in text and "复制" in text
+
+
+@pytest.mark.parametrize("lang", ["en", "zh"])
+def test_help_documents_optional_vim_note_copy_paste(lang):
+    text = "\n".join(line for line, _kind in tui.help_lines(lang))
+    for token in ("yy", "v/V", "p/P", ":wq", ":q!", "ZZ", "ZQ"):
+        assert token in text
+    assert ("disabled by default" in text if lang == "en" else "默认关闭" in text)
+    assert ("system clipboard" in text if lang == "en" else "系统剪贴板" in text)
 ```
 
 - [ ] **Step 2: Run and verify RED**
@@ -708,6 +1018,8 @@ Expected: missing chapter/copy/five-item documentation.
 - [ ] **Step 3: Update both Help manuals**
 
 Add to reading mode: `[` previous chapter, `]` next chapter, and `y` copy highlighted verse. Add to Navigator: `Ctrl-U / Ctrl-D` move five items and `y` copies the previewed highlighted verse. State that clipboard failure is reported in the status line.
+
+In both Help manuals, document that Vim note keys are disabled by default and enabled in Settings, affect only inline editing, provide Insert/Normal/Visual modes, and support `yy`, `v/V` + `y`, `p/P`, `:wq`/`ZZ`, and `:q!`/`ZQ` through the system clipboard.
 
 - [ ] **Step 4: Verify Help and focused TUI tests GREEN**
 
@@ -778,10 +1090,11 @@ Verify this exact interaction sequence:
 3. Return to reading, press `]` and confirm `Matthew › 2 › v.1`; press `[` and confirm `Matthew › 1 › v.1`.
 4. Open NAV, note the selected book, press `Ctrl-D` and confirm it advances five books; press `Ctrl-U` and confirm it returns five books.
 5. Close NAV, press `y`, confirm the status reports copy success, and run `pbpaste` in another shell to confirm the copied reference and displayed versions.
-6. Navigate and commit Isaiah 5:7, quit, restart with the same `EXEG_USER_ROOT`, and confirm Isaiah 5:7 is restored.
-7. At 131 columns confirm the CUVS row visibly contains `冤声。`.
+6. Confirm Vim note keys are off in Settings. Enable them, edit a note, use `Esc`, `yy`, `v/V` + `y`, and `p/P`, verify clipboard contents with `pbpaste`, then use `:wq` and reopen the note to confirm it saved.
+7. Navigate and commit Isaiah 5:7, quit, restart with the same `EXEG_USER_ROOT`, and confirm Isaiah 5:7 is restored.
+8. At 131 columns confirm the CUVS row visibly contains `冤声。`.
 
-Expected: all seven checks pass locally.
+Expected: all eight checks pass locally.
 
 - [ ] **Step 10: Commit Help and final regression coverage**
 
