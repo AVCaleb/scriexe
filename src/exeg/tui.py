@@ -848,7 +848,8 @@ class Controller:
         lines.append((f"{_reference_label(b, n.chapter, n.verse, self.lang)} · {tr(self.lang, 'word_study')} · {lemma} ({strongs or '?'})",
                       KIND_HEADER))
         if gloss:
-            lines.append((f"  " + tr(self.lang, "gloss") + f": {gloss}", KIND_LABEL))
+            lines.append((f"  " + tr(self.lang, "gloss")
+                         + f": {gloss}" + tr(self.lang, "gloss_source"), KIND_LABEL))
         words = corpus.get_words(vref, ORIG["nt" if b.nt else "ot"])
         toks = [f"[{_surface(w)}]" if w.idx == widx else _surface(w) for w in words]
         if toks:
@@ -876,12 +877,13 @@ class Controller:
         occ = r.get("occurrences", [])
         lines.append(("", KIND_NOTE))
         lines.append(("  " + tr(self.lang, "occurrences", n=len(occ)), KIND_LABEL))
+        occurrence_start = len(lines)
         for i, (ver, osis, ch, v, surface, morph) in enumerate(occ):
             mark = "▶" if i == self.word_cursor else " "
             mlbl = search.greek_morph_label(morph)
             lines.append((f" {mark} {osis} {ch}:{v}  {surface}  ({mlbl})",
                           KIND_OCCUR_SEL if i == self.word_cursor else KIND_OCCUR))
-        return lines, 2
+        return lines, (occurrence_start + self.word_cursor if occ else 2)
 
     def editor_lines(self) -> list[tuple[str, str]]:
         """Lines for the bottom editor pane (header + note buffer)."""

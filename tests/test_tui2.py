@@ -362,6 +362,35 @@ def test_word_cursor_moves_and_jumps():
     assert c.word_idx is None
 
 
+def test_word_view_focus_follows_cursor(tmp_notes):
+    c = make_controller()
+    _drill_to_1pet_3_18_word(c, 7)
+    c.commit()
+    occ = c.word_result["occurrences"]
+    assert len(occ) > 1
+    lines, focus0 = c.render_content()
+    c.move_word_cursor(1)
+    lines, focus1 = c.render_content()
+    assert focus1 > focus0                # selection moved down, focus followed
+    assert "▶" in lines[focus1][0]
+    c.move_word_cursor(-1)
+    _, focus2 = c.render_content()
+    assert focus2 == focus0
+
+
+def test_word_view_gloss_labels_strongs_source(tmp_notes):
+    for lang in ("en", "zh"):
+        c = make_controller()
+        c.lang = lang
+        _drill_to_1pet_3_18_word(c, 7)
+        c.commit()
+        lines, _ = c.render_content()
+        gloss_lines = [t for t, _ in lines if "gloss" in t or "释义" in t]
+        assert gloss_lines, "gloss row missing"
+        assert any("OpenScriptures Strong" in t for t in gloss_lines), \
+            f"{lang}: gloss lacks source attribution"
+
+
 def test_exit_word_view():
     c = make_controller()
     _drill_to_1pet_3_18_word(c, 7)

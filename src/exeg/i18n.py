@@ -79,6 +79,8 @@ S = {
     # word study
     "word_study": {"en": "word study", "zh": "字词研究"},
     "gloss": {"en": "gloss", "zh": "释义"},
+    "gloss_source": {"en": "  (source: OpenScriptures Strong's dictionaries)",
+                      "zh": "  (来源：OpenScriptures Strong's 词典)"},
     "in_corpus": {"en": "in corpus", "zh": "全书出现"},
     "occurrences": {"en": "occurrences ({n})  — j/k select · Enter jump · Esc back",
                     "zh": "出现 ({n})  — j/k 选择 · Enter 跳转 · Esc 返回"},
