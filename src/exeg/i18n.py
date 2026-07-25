@@ -10,8 +10,10 @@ S = {
     # status / mode hints
     "nav_hint": {"en": "j/k move · Ctrl-U/D ×5 · l/h column · Enter commit · y copy · Esc exit · ? help",
                  "zh": "j/k 移动 · Ctrl-U/D ×5 · l/h 切换列 · Enter 选定 · y 复制 · Esc 退出 · ? 帮助"},
-    "normal_hint": {"en": "j/k verse · [/] chapter · Tab nav · y copy · z scope · +/- window · i note · / find · b/p bookmark · o settings · ? help · :q quit",
-                    "zh": "j/k 经文 · [/] 章节 · Tab 导航 · y 复制 · z 范围 · +/- 窗口 · i 笔记 · / 查找 · b/p 书签 · o 设置 · ? 帮助 · :q 退出"},
+    "normal_hint": {"en": "j/k verse · [/] chapter · g/G first/last · Tab nav · y copy · z scope · +/- window · i note · / find · b back · p set bookmark · o settings · ? help · :q quit",
+                    "zh": "j/k 经文 · [/] 章节 · g/G 首末节 · Tab 导航 · y 复制 · z 范围 · +/- 窗口 · i 笔记 · / 查找 · b 返回 · p 设书签 · o 设置 · ? 帮助 · :q 退出"},
+    "find_hint": {"en": "n next · N prev · Enter accept · Esc exit",
+                  "zh": "n 下一个 · N 上一个 · Enter 确认 · Esc 退出"},
     "word_hint": {"en": "j/k select · Enter jump · Esc back",
                   "zh": "j/k 选择 · Enter 跳转 · Esc 返回"},
     "result_hint": {"en": "j/k select · Enter jump · Esc back",

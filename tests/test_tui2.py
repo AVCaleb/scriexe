@@ -944,7 +944,7 @@ def test_find_is_scoped_to_plain_verse_preview():
     assert c.find("match") == 0
 
 
-def test_active_find_uses_jk_and_enter_or_escape_clears():
+def test_active_find_uses_nN_and_enter_or_escape_clears():
     c = make_controller()
     c.view = "verse"
     c.nav_visible = False
@@ -952,9 +952,9 @@ def test_active_find_uses_jk_and_enter_or_escape_clears():
     c.find_hits = [2, 4]
     c.find_idx = 0
     original_focus = c.focus
-    tui._handle(None, c, ord("j"), 0, [], -1, 20)
+    tui._handle(None, c, ord("n"), 0, [], -1, 20)
     assert c.find_idx == 1 and c.focus == original_focus
-    tui._handle(None, c, ord("k"), 0, [], -1, 20)
+    tui._handle(None, c, ord("N"), 0, [], -1, 20)
     assert c.find_idx == 0
     tui._handle(None, c, 10, 0, [], -1, 20)
     assert c.find_pat == "" and c.find_hits == []
@@ -962,6 +962,35 @@ def test_active_find_uses_jk_and_enter_or_escape_clears():
     c.find_pat, c.find_hits, c.find_idx = "again", [3], 0
     tui._handle(None, c, 27, 0, [], -1, 20)
     assert c.find_pat == "" and c.find_hits == []
+
+
+def test_active_find_status_shows_find_specific_hints():
+    c = make_controller()
+    c.lang = "en"
+    c.view = "verse"
+    c.nav_visible = False
+    c.find_pat = "match"
+    c.find_hits = [2, 4]
+    c.find_idx = 0
+    status = tui._status(c)
+    assert "FIND" in status
+    assert "n" in status and "N" in status and "Enter" in status and "Esc" in status
+    # ordinary reading commands are not advertised while find is active
+    for token in ("j/k verse", "Tab nav", "z scope", "+/-"):
+        assert token not in status
+
+
+def test_normal_hint_describes_bookmark_and_gG_separately():
+    c = make_controller()
+    c.lang = "en"
+    c.nav_visible = False
+    status = tui._status(c)
+    assert "p set" in status or "p set bookmark" in status
+    assert "b back" in status or "b return" in status
+    assert "p" in status and "b" in status
+    # b and p are described as distinct commands, not a combined token
+    assert "b/p" not in status
+    assert "g/G" in status or "g" in status
 
 
 def test_opening_help_clears_find_and_has_help_only_status():

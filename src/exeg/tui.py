@@ -1547,8 +1547,8 @@ For IME-heavy Chinese input, use :set editor popup. The popup editor accepts nor
 
 # Find in preview
 Press / in ordinary verse view with NAV closed to search the currently rendered translations and visible notes. This is a literal, case-insensitive search rather than a regular expression. It never searches old Results, Help, Settings, Word, or NAV content.
-$ j / Down    move to the next match
-$ k / Up      move to the previous match
+$ n / Down    move to the next match
+$ N / Up      move to the previous match
 $ Enter       accept the current viewport and clear highlighting
 $ Esc         clear find and resume normal verse navigation
 Submitting an empty pattern also clears find.
@@ -1684,8 +1684,8 @@ $ 方向键       移动内嵌编辑器光标
 
 # 当前预览内查找
 在普通经文视图且导航器关闭时，按 / 查找当前已渲染的译本和可见笔记。这是忽略大小写的字面查找，不是正则表达式；它绝不会搜索旧结果、帮助、设置、词汇或导航内容。
-$ j / 下方向键    下一个匹配
-$ k / 上方向键    上一个匹配
+$ n / 下方向键    下一个匹配
+$ N / 上方向键    上一个匹配
 $ Enter            接受当前滚动位置并清除高亮
 $ Esc              清除查找，恢复普通经节导航
 提交空内容也会清除查找。
@@ -2209,6 +2209,11 @@ def _status(c: Controller) -> str:
     mode = "NAV" if c.nav_visible else ("WORD" if c.view == "word" else
                                         ("RESULT" if c.view == "result" else
                                          ("SETTINGS" if c.view == "settings" else "NORMAL")))
+    find_active = (c.find_pat and c.find_allowed() and c.find_hits
+                   and c.find_idx >= 0)
+    if find_active and mode == "NORMAL":
+        msg = (c.message + " · ") if c.message else ""
+        return f" {msg}FIND · {tr(c.lang, 'find_hint')}"
     hint = {
         "NAV": tr(c.lang, "nav_hint"),
         "NORMAL": tr(c.lang, "normal_hint"),
@@ -2749,10 +2754,10 @@ def _handle(screen, c: Controller, key, scroll, lines, focus_line, body_h) -> in
             c.find_target_line = c.find_hits[c.find_idx] if c.find_hits else None
         return 0
     if c.find_pat and c.find_allowed():
-        if k in (ord("j"), curses.KEY_DOWN):
+        if k in (ord("n"), curses.KEY_DOWN):
             c.find_target_line = c.find_next(1)
             return 0
-        if k in (ord("k"), curses.KEY_UP):
+        if k in (ord("N"), curses.KEY_UP):
             c.find_target_line = c.find_next(-1)
             return 0
         if k in (10, 13, curses.KEY_ENTER):
