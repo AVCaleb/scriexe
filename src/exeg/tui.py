@@ -1561,7 +1561,7 @@ exeg TUI — keys
        :word <q> · :search <regex> · :export <ref> · :set … · :help · :q
 
 # Detailed help
-This manual describes what each mode and command changes. Scroll with j/k, the arrow keys, Enter, Ctrl-D, or Ctrl-U. Press q or Esc to close Help.
+This manual describes what each mode and command changes. Scroll with j/k or the arrow keys (one row), Enter (one row), or Ctrl-U/Ctrl-D (five rows). Press q or Esc to close Help.
 
 # Navigator
 Press Tab to open the four-column navigator: Books, Chapters, Verses, and Words. Moving a selection updates the preview immediately but does not change the committed reading position until you press Enter.
@@ -1703,7 +1703,7 @@ exeg TUI — 快捷键
         :word <查询> · :search <正则> · :export <经文> · :set … · :help · :q
 
 # 详细帮助
-本手册说明每种模式和命令实际会改变什么。使用 j/k、方向键、Enter、Ctrl-D 或 Ctrl-U 滚动；按 q 或 Esc 关闭帮助。
+本手册说明每种模式和命令实际会改变什么。使用 j/k 或方向键滚动一行，Enter 滚动一行，Ctrl-U/Ctrl-D 滚动五行；按 q 或 Esc 关闭帮助。
 
 # 导航器
 按 Tab 打开四列导航器：书卷、章节、经节和词汇。移动选项会立即更新右侧预览，但只有按 Enter 后才会改变正式阅读位置。
@@ -2264,8 +2264,8 @@ def _status(c: Controller) -> str:
     if c.intro:
         return " first-run setup · j/k move · Enter select · Begin to start "
     if c.show_help:
-        return (" HELP · j/k/↑/↓ scroll · q/Esc close " if c.lang == "en" else
-                " 帮助 · j/k/↑/↓ 滚动 · q/Esc 关闭 ")
+        return (" HELP · j/k/↑/↓ scroll · Ctrl-U/D ×5 · q/Esc close " if c.lang == "en" else
+                " 帮助 · j/k/↑/↓ 滚动 · Ctrl-U/D ×5 · q/Esc 关闭 ")
     if c.editing:
         if c.vim_keys:
             key = {"insert": "vim_insert_status", "normal": "vim_normal_status",
@@ -2878,13 +2878,17 @@ def _handle(screen, c: Controller, key, scroll, lines, focus_line, body_h) -> in
         elif k == 27:
             c.finish_intro()
         return 0
-    # help overlay: scroll with j/k, close with ? / q / Esc
+    # help overlay: scroll with j/k (1 row) or Ctrl-U/D (5 rows), close with q / Esc
     if c.show_help:
         if k in (ord("q"), 27):
             c.show_help = False
-        elif k in (ord("j"), curses.KEY_DOWN, 4, 10, 13):
+        elif k == 4:  # Ctrl-D — jump five rows down
+            c.help_scroll += 5
+        elif k == 21:  # Ctrl-U — jump five rows up
+            c.help_scroll = max(0, c.help_scroll - 5)
+        elif k in (ord("j"), curses.KEY_DOWN, 10, 13):
             c.help_scroll += 1
-        elif k in (ord("k"), curses.KEY_UP, 21):
+        elif k in (ord("k"), curses.KEY_UP):
             c.help_scroll = max(0, c.help_scroll - 1)
         # any other key is ignored (does NOT dismiss)
         return 0

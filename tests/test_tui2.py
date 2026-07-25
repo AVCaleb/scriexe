@@ -1349,8 +1349,12 @@ def test_help_keys_scroll_and_close_without_other_actions():
     assert c.help_scroll == 1
     tui._handle(None, c, ord("k"), 0, [], -1, 20)
     assert c.help_scroll == 0
+    # Ctrl-D jumps five rows
     tui._handle(None, c, 4, 0, [], -1, 20)
-    assert c.help_scroll == 1
+    assert c.help_scroll == 5
+    # Ctrl-U jumps five rows back
+    tui._handle(None, c, 21, 0, [], -1, 20)
+    assert c.help_scroll == 0
     tui._handle(None, c, ord("q"), 0, [], -1, 20)
     assert c.show_help is False and c.running is True
 
