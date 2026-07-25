@@ -354,7 +354,14 @@ class Controller:
         if self._versions_custom:
             return self.versions
         original = ORIG["nt" if self.shown().book().nt else "ot"]
-        return ([original] if corpus.has_version(original) else []) + list(self.translations)
+        raw = ([original] if corpus.has_version(original) else []) + list(self.translations)
+        seen: set[str] = set()
+        out: list[str] = []
+        for v in raw:
+            if v not in seen:
+                seen.add(v)
+                out.append(v)
+        return out
 
     # ---- display state (pin-aware) -----------------------------------------
 

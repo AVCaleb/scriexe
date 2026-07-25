@@ -1121,6 +1121,20 @@ def test_ot_versions_include_hebrew():
     assert "sblgnt" not in ev        # Greek NT corpus not used for OT
 
 
+def test_effective_versions_dedupes_auto_original_in_translations(tmp_notes):
+    from exeg import tui as _t
+    c = make_controller()
+    c.translations = ["wlc", "cuvs", "asv", "kjv", "vulgate"]
+    c.goto(_t.Node(_t._osis_index("Ruth"), 1, 2))
+    ev = c.effective_versions()
+    assert ev.count("wlc") == 1     # auto-original not duplicated
+    assert ev == ["wlc", "cuvs", "asv", "kjv", "vulgate"]
+    c.goto(_t.Node(_t._osis_index("Matt"), 1, 1))
+    ev2 = c.effective_versions()
+    assert ev2.count("sblgnt") == 1    # sblgnt auto-original not duplicated
+    assert ev2[0] == "sblgnt"          # original first
+
+
 def test_nt_versions_include_greek():
     c = make_controller()
     ev = c.effective_versions()
