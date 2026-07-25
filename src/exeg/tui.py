@@ -1793,7 +1793,14 @@ def _slice_cells(text: str, max_cells: int) -> str:
 def _put(win, y, x, s, attr, maxw):
     if x >= maxw:
         return
-    s = _slice_cells(s, max(0, maxw - x - 1))
+    capacity = max(0, maxw - x)
+    try:
+        height, _width = win.getmaxyx()
+    except (AttributeError, curses.error):
+        height = -1
+    if y == height - 1:
+        capacity = max(0, capacity - 1)
+    s = _slice_cells(s, capacity)
     if not s:
         return
     try:

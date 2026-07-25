@@ -1227,17 +1227,54 @@ def test_wrap_one_uses_version_body_as_hanging_indent():
     assert chunks[1].startswith(" " * 10 + "⸀ζηλωταὶ")
 
 
+def test_put_does_not_drop_final_wide_character_from_wrapped_body():
+    body = ("万军之耶和华的葡萄园就是 以色列家； 他所喜爱的树就是 犹大人。 "
+            "他指望的是公平， 谁知倒有暴虐； 指望的是公义， 谁知倒有冤声。")
+    logical = tui._version_line("和合本", body)
+    rows, _ = tui._build_rows([(logical, tui.KIND_NORMAL)], 131, True, True)
+    assert rows[0][0].endswith("声") and rows[1][0].endswith("。")
+
+    class FakeWindow:
+        def __init__(self):
+            self.writes = []
+        def getmaxyx(self):
+            return (20, 131)
+        def addstr(self, y, x, text, attr):
+            self.writes.append(text)
+
+    win = FakeWindow()
+    for y, (text, _kind) in enumerate(rows):
+        tui._put(win, y, 0, text, 0, 131)
+    assert win.writes[0].endswith("声")
+    assert "冤声。" in "".join(part.strip() for part in win.writes)
+
+
 def test_put_clips_to_available_terminal_cells():
     class FakeWindow:
         def __init__(self):
             self.writes = []
-
+        def getmaxyx(self):
+            return (20, 20)
         def addstr(self, y, x, text, attr):
             self.writes.append((y, x, text, attr))
 
     win = FakeWindow()
     tui._put(win, 0, 10, "中文中文中文中文中文", 0, 20)
-    assert _terminal_cells(win.writes[0][2]) <= 9
+    assert _terminal_cells(win.writes[0][2]) <= 10
+
+
+def test_put_reserves_only_the_terminal_lower_right_cell():
+    class FakeWindow:
+        def __init__(self):
+            self.writes = []
+        def getmaxyx(self):
+            return (20, 20)
+        def addstr(self, y, x, text, attr):
+            self.writes.append((y, x, text, attr))
+
+    win = FakeWindow()
+    tui._put(win, 19, 10, "abcdefghij", 0, 20)
+    assert win.writes[0][2] == "abcdefghi"
 
 
 def test_title_uses_pencil_for_focus_marker():
