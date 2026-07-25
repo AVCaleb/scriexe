@@ -60,6 +60,48 @@ def test_preference_persistence_preserves_setup_and_last_read(tmp_notes):
     assert meta["last_read"] == {"book": "Matt", "chapter": 2, "verse": 3}
 
 
+def test_move_chapter_crosses_book_boundaries_and_opens_verse_one(tmp_notes):
+    c = tui.Controller(intro=True)
+    c.goto(tui.Node(tui._osis_index("Matt"), 2, 10))
+    c.move_chapter(-1)
+    assert (c.focus.book().osis, c.focus.chapter, c.focus.verse) == ("Matt", 1, 1)
+    c.move_chapter(-1)
+    assert (c.focus.book().osis, c.focus.chapter, c.focus.verse) == ("Mal", 4, 1)
+    c.move_chapter(1)
+    assert (c.focus.book().osis, c.focus.chapter, c.focus.verse) == ("Matt", 1, 1)
+
+
+def test_move_chapter_clamps_at_canonical_endpoints(tmp_notes):
+    c = tui.Controller(intro=True)
+    c.goto(tui.Node(tui._osis_index("Gen"), 1, 1))
+    c.move_chapter(-1)
+    assert (c.focus.book().osis, c.focus.chapter) == ("Gen", 1)
+    c.goto(tui.Node(tui._osis_index("Rev"), 22, 1))
+    c.move_chapter(1)
+    assert (c.focus.book().osis, c.focus.chapter) == ("Rev", 22)
+
+
+def test_brackets_route_to_previous_and_next_chapter(tmp_notes):
+    c = tui.Controller(intro=True)
+    c.intro = False
+    c.nav_visible = False
+    tui._handle(None, c, ord("]"), 0, [], -1, 20)
+    assert (c.focus.book().osis, c.focus.chapter, c.focus.verse) == ("Matt", 2, 1)
+    tui._handle(None, c, ord("["), 0, [], -1, 20)
+    assert (c.focus.book().osis, c.focus.chapter, c.focus.verse) == ("Matt", 1, 1)
+
+
+def test_nav_ctrl_u_ctrl_d_move_five_items(tmp_notes):
+    c = tui.Controller(intro=True)
+    c.intro = False
+    c.nav_col = 0
+    assert c.column_value(0) == tui._osis_index("Matt") + 1
+    tui._handle(None, c, 4, 0, [], -1, 20)
+    assert c.column_value(0) == tui._osis_index("Matt") + 6
+    tui._handle(None, c, 21, 0, [], -1, 20)
+    assert c.column_value(0) == tui._osis_index("Matt") + 1
+
+
 def test_screen_open_uses_short_escape_delay(monkeypatch):
     calls = []
     monkeypatch.setattr(tui, "_direct_term_name", lambda *_args, **_kwargs: None)

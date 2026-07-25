@@ -946,6 +946,25 @@ class Controller:
         ch, v = keys[i]
         self.goto(Node(self.focus.book_idx, ch, v), view="verse", word_idx=None)
 
+    def move_chapter(self, delta: int):
+        if self.view != "verse" or delta == 0:
+            return
+        book_idx = self.focus.book_idx
+        chapter = self.focus.chapter + (1 if delta > 0 else -1)
+        if chapter < 1:
+            if book_idx == 0:
+                chapter = 1
+            else:
+                book_idx -= 1
+                chapter = canon.BOOKS[book_idx].chapters
+        elif chapter > canon.BOOKS[book_idx].chapters:
+            if book_idx == len(canon.BOOKS) - 1:
+                chapter = canon.BOOKS[book_idx].chapters
+            else:
+                book_idx += 1
+                chapter = 1
+        self.goto(Node(book_idx, chapter, 1), view="verse", word_idx=None)
+
     def move_word_cursor(self, delta: int):
         occ = self.word_result.get("occurrences", [])
         if not occ:
@@ -2394,6 +2413,10 @@ def _handle(screen, c: Controller, key, scroll, lines, focus_line, body_h) -> in
             c.move_sel(1)
         elif k in (ord("k"), curses.KEY_UP):
             c.move_sel(-1)
+        elif k == 4:  # Ctrl-D
+            c.move_sel(5)
+        elif k == 21:  # Ctrl-U
+            c.move_sel(-5)
         elif k == ord("g"):
             c._set_col_value(c.nav_col, 1)
             c.sel = Node(c.book_idx, c.chapter, c.verse)
@@ -2446,6 +2469,12 @@ def _handle(screen, c: Controller, key, scroll, lines, focus_line, body_h) -> in
         return 0
     if k in (ord("k"), curses.KEY_UP):
         c.move_focus(-1)
+        return 0
+    if k == ord("["):
+        c.move_chapter(-1)
+        return 0
+    if k == ord("]"):
+        c.move_chapter(1)
         return 0
     if k == ord("z"):
         c.cycle_scope()
