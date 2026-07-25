@@ -1344,6 +1344,35 @@ def test_small_settings_pane_scrolls_selected_row_into_view(tmp_notes):
     assert scroll > 0
 
 
+def test_chapter_and_window_share_centered_focus_scrolling(tmp_notes):
+    class FakeWindow:
+        def addstr(self, y, x, text, attr):
+            pass
+
+    screen = type("FakeScreen", (), {"stdscr": FakeWindow()})()
+    lines = [(f"line {i}", tui.KIND_NORMAL) for i in range(20)]
+    expected_by_focus = {0: 0, 10: 8, 19: 15}
+
+    for focus_line, expected in expected_by_focus.items():
+        offsets = {}
+        for scope in ("window", "chapter"):
+            c = make_controller()
+            c.scope = scope
+            offsets[scope] = tui._draw_pane(
+                screen, c, lines, focus_line,
+                top=0, body_h=5, x=0, w=80, scroll=0, color=False,
+            )
+
+        assert offsets == {"window": expected, "chapter": expected}
+
+    c = make_controller()
+    c.scope = "verse"
+    assert tui._draw_pane(
+        screen, c, lines, 10,
+        top=0, body_h=5, x=0, w=80, scroll=0, color=False,
+    ) == 6
+
+
 def test_open_settings_and_toggle_lang(tmp_notes):
     c = make_controller()
     c.open_settings()

@@ -2392,17 +2392,29 @@ def _build_rows(lines, avail, color, wrap=True):
     return rows, line_row
 
 
-def _draw_lines(screen, lines, top, height, x, w, scroll, color, focus_line=-1, wrap=True):
-    """Draw up to `height` rows of `lines` (word-wrapped) starting at row `top`."""
+def _draw_lines(screen, lines, top, height, x, w, scroll, color,
+               focus_line=-1, wrap=True, center=False):
+    """Draw up to `height` rows of `lines` (word-wrapped) starting at row `top`.
+
+    When *center* is True the focus row is kept in the middle of the pane
+    by scrolling the content — no blank padding is added.  At the very start
+    the content sits at the top; at the very end it sits at the bottom.
+    """
     avail = max(8, w - x)
     rows, line_row = _build_rows(lines, avail, color, wrap)
     focus_row = line_row[focus_line] if 0 <= focus_line < len(line_row) else -1
     if focus_row >= 0:
-        if focus_row < scroll:
-            scroll = focus_row
-        elif focus_row >= scroll + height:
-            scroll = focus_row - height + 1
-    scroll = max(0, min(scroll, max(0, len(rows) - height)))
+        if center:
+            scroll = focus_row - height // 2
+            scroll = max(0, min(scroll, max(0, len(rows) - height)))
+        else:
+            if focus_row < scroll:
+                scroll = focus_row
+            elif focus_row >= scroll + height:
+                scroll = focus_row - height + 1
+            scroll = max(0, min(scroll, max(0, len(rows) - height)))
+    else:
+        scroll = max(0, min(scroll, max(0, len(rows) - height)))
     for r in range(height):
         idx = scroll + r
         if idx >= len(rows):
@@ -2420,7 +2432,9 @@ def _line_to_row(lines, line_idx, avail, color, wrap=True):
 
 
 def _draw_pane(screen, c, lines, focus_line, top, body_h, x, w, scroll, color):
-    return _draw_lines(screen, lines, top, body_h, x, w, scroll, color, focus_line, wrap=True)
+    center = c.scope in ("window", "chapter")
+    return _draw_lines(screen, lines, top, body_h, x, w, scroll, color,
+                       focus_line, wrap=True, center=center)
 
 
 def _note_selected_spans(c: Controller) -> dict[int, tuple[int, int]]:
