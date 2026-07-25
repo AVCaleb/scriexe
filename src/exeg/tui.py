@@ -24,9 +24,9 @@ ORIG = {"nt": "sblgnt", "ot": "wlc"}
 LOCAL_DEFAULT = ["cuvs", "asv"]
 
 SCOPES = ("window", "chapter", "verse")
-DEFAULT_BOOK = "1Pet"
-DEFAULT_CHAPTER = 3
-DEFAULT_VERSE = 18
+DEFAULT_BOOK = "Matt"
+DEFAULT_CHAPTER = 1
+DEFAULT_VERSE = 1
 DEFAULT_WINDOW = 5
 
 
@@ -154,6 +154,37 @@ def _osis_index(osis: str) -> int:
     return next(i for i, b in enumerate(canon.BOOKS) if b.osis == osis)
 
 
+def _default_node() -> Node:
+    return Node(_osis_index(DEFAULT_BOOK), DEFAULT_CHAPTER, DEFAULT_VERSE)
+
+
+def _node_from_meta(meta: dict, intro: bool = False) -> Node:
+    if intro or not meta.get("setup_done"):
+        return _default_node()
+    value = meta.get("last_read")
+    if not isinstance(value, dict):
+        return _default_node()
+    try:
+        book_idx = _osis_index(str(value["book"]))
+        chapter = int(value["chapter"])
+        verse = int(value["verse"])
+        book = canon.BOOKS[book_idx]
+        if not 1 <= chapter <= book.chapters:
+            raise ValueError
+        maximum = _max_verse(book, chapter)
+        if verse < 1 or (maximum and verse > maximum):
+            raise ValueError
+        return Node(book_idx, chapter, verse)
+    except (KeyError, TypeError, ValueError, StopIteration):
+        return _default_node()
+
+
+def _write_meta_updates(**updates) -> None:
+    meta = notes.read_meta()
+    meta.update(updates)
+    notes.write_meta(meta)
+
+
 def _surface(w: corpus.Word) -> str:
     return w.surface.replace("/", "")
 
@@ -174,11 +205,12 @@ def _key_set(env_var: str) -> bool:
 
 class Controller:
     def __init__(self, versions: list[str] | None = None, intro: bool = False):
-        bi = canon.find_book(DEFAULT_BOOK).osis
-        self.book_idx = next(i for i, b in enumerate(canon.BOOKS) if b.osis == bi)
-        self.chapter = DEFAULT_CHAPTER
-        self.verse = DEFAULT_VERSE
-        self.focus = Node(self.book_idx, self.chapter, self.verse)
+        m = notes.read_meta()
+        initial = _node_from_meta(m, intro)
+        self.book_idx = initial.book_idx
+        self.chapter = initial.chapter
+        self.verse = initial.verse
+        self.focus = initial
         self.sel = Node(self.book_idx, self.chapter, self.verse)
         self.sel_word = 1                       # navigator's word selection
         self.nav_visible = True
@@ -235,7 +267,6 @@ class Controller:
 
         # settings
         self.highlight = "auto"
-        m = notes.read_meta()
         self.lang = m.get("lang", "en")
         if self.lang not in ("en", "zh"):
             self.lang = "en"
@@ -315,9 +346,15 @@ class Controller:
         self.word_idx = word_idx
 
     def goto(self, node: Node, view="verse", word_idx=None):
-        """Change focus (no history — `b` returns to the bookmark, set with `p`)."""
+        """Change and persist focus (`b` returns to the session bookmark)."""
         self.clear_find()
         self._set_focus_state(node, view, word_idx)
+        self._persist_reading_position()
+
+    def _persist_reading_position(self):
+        _write_meta_updates(last_read={"book": self.focus.book().osis,
+                                       "chapter": self.focus.chapter,
+                                       "verse": self.focus.verse})
 
     def set_bookmark(self):
         """Record/replace the bookmark at the current position."""
@@ -425,10 +462,12 @@ class Controller:
             self.finish_intro()
 
     def finish_intro(self):
+        self._set_focus_state(_default_node())
         self._persist_meta()
-        m = notes.read_meta()
-        m["setup_done"] = True
-        notes.write_meta(m)
+        _write_meta_updates(setup_done=True,
+                            last_read={"book": self.focus.book().osis,
+                                       "chapter": self.focus.chapter,
+                                       "verse": self.focus.verse})
         self.intro = False
         self.message = ""
 
@@ -1159,11 +1198,11 @@ class Controller:
                 ":set editor popup, :set window N, :set notemark <char>)")
 
     def _persist_meta(self):
-        notes.write_meta({"highlight": self.highlight, "editor": self.editor_mode,
-                           "window": self.window, "lang": self.lang,
-                           "translations": list(self.translations),
-                           "show_verse_marks": self.show_verse_marks,
-                           "notemark": self.notemark})
+        _write_meta_updates(highlight=self.highlight, editor=self.editor_mode,
+                            window=self.window, lang=self.lang,
+                            translations=list(self.translations),
+                            show_verse_marks=self.show_verse_marks,
+                            notemark=self.notemark)
 
     DEFAULT_SETTINGS = {"highlight": "auto", "editor_mode": "inline", "window": 5,
                         "lang": "en", "translations": ["cuvs", "asv"],

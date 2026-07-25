@@ -6,17 +6,58 @@ import pytest
 from exeg import canon, corpus, notes, refs, tui
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def tmp_notes(tmp_path, monkeypatch):
-    """Redirect notes storage to a temp dir; keep the real corpus."""
+    """Redirect every TUI test's notes and metadata to a temporary directory."""
     monkeypatch.setattr(notes, "notes_root", lambda: tmp_path / "notes")
     return tmp_path / "notes"
 
 
 def make_controller():
-    c = tui.Controller()
+    c = tui.Controller(intro=True)
+    c._set_focus_state(tui.Node(tui._osis_index("1Pet"), 3, 18))
+    c.intro = False
     c.lang = "en"
     return c
+
+
+def test_unconfigured_controller_starts_at_matthew_1_1(tmp_notes):
+    c = tui.Controller(intro=True)
+    assert (c.focus.book().osis, c.focus.chapter, c.focus.verse) == ("Matt", 1, 1)
+
+
+def test_configured_controller_restores_last_committed_verse(tmp_notes):
+    notes.write_meta({"setup_done": True,
+                      "last_read": {"book": "Isa", "chapter": 5, "verse": 7}})
+    c = tui.Controller()
+    assert (c.focus.book().osis, c.focus.chapter, c.focus.verse) == ("Isa", 5, 7)
+
+
+def test_invalid_last_read_falls_back_to_matthew_1_1(tmp_notes):
+    notes.write_meta({"setup_done": True,
+                      "last_read": {"book": "NoBook", "chapter": 999, "verse": 0}})
+    c = tui.Controller()
+    assert (c.focus.book().osis, c.focus.chapter, c.focus.verse) == ("Matt", 1, 1)
+
+
+def test_goto_persists_focus_without_overwriting_preferences(tmp_notes):
+    notes.write_meta({"setup_done": True, "lang": "zh", "translations": ["cuvs"]})
+    c = tui.Controller()
+    c.goto(tui.Node(tui._osis_index("Isa"), 5, 7))
+    meta = notes.read_meta()
+    assert meta["last_read"] == {"book": "Isa", "chapter": 5, "verse": 7}
+    assert meta["setup_done"] is True
+    assert meta["lang"] == "zh" and meta["translations"] == ["cuvs"]
+
+
+def test_preference_persistence_preserves_setup_and_last_read(tmp_notes):
+    notes.write_meta({"setup_done": True,
+                      "last_read": {"book": "Matt", "chapter": 2, "verse": 3}})
+    c = tui.Controller()
+    c.execute(":set window 8")
+    meta = notes.read_meta()
+    assert meta["setup_done"] is True
+    assert meta["last_read"] == {"book": "Matt", "chapter": 2, "verse": 3}
 
 
 def test_screen_open_uses_short_escape_delay(monkeypatch):
