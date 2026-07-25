@@ -279,6 +279,7 @@ class Controller:
         self.nav_visible = True
         self.nav_col = 0                        # 0 books, 1 chapters, 2 verses, 3 words
         self.scope = "window"
+        self._chapter_scroll_anchor: tuple[tuple[int, int, int], int] | None = None
         self.window = DEFAULT_WINDOW
         # versions: user override vs testament-aware auto originals
         self._versions_custom = versions is not None
@@ -2432,9 +2433,40 @@ def _line_to_row(lines, line_idx, avail, color, wrap=True):
 
 
 def _draw_pane(screen, c, lines, focus_line, top, body_h, x, w, scroll, color):
-    center = c.scope in ("window", "chapter")
-    return _draw_lines(screen, lines, top, body_h, x, w, scroll, color,
-                       focus_line, wrap=True, center=center)
+    if c.scope != "chapter":
+        c._chapter_scroll_anchor = None
+        return _draw_lines(screen, lines, top, body_h, x, w, scroll, color,
+                           focus_line, wrap=True, center=c.scope == "window")
+
+    find_active = bool(c.find_hits and c.find_idx >= 0)
+    if find_active or focus_line < 0:
+        c._chapter_scroll_anchor = None
+        return _draw_lines(screen, lines, top, body_h, x, w, scroll, color,
+                           focus_line, wrap=True, center=find_active)
+
+    avail = max(8, w - x)
+    focus_row = _line_to_row(lines, focus_line, avail, color, wrap=True)
+    if focus_row < 0:
+        c._chapter_scroll_anchor = None
+        return _draw_lines(screen, lines, top, body_h, x, w, scroll, color,
+                           focus_line=-1, wrap=True, center=False)
+
+    context = (body_h, avail, hash(tuple(lines)))
+    previous = c._chapter_scroll_anchor
+    if previous is None or previous[0] != context:
+        next_scroll = _draw_lines(
+            screen, lines, top, body_h, x, w, scroll, color,
+            focus_line, wrap=True, center=True,
+        )
+    else:
+        next_scroll = _draw_lines(
+            screen, lines, top, body_h, x, w,
+            scroll + focus_row - previous[1], color,
+            focus_line=-1, wrap=True, center=False,
+        )
+
+    c._chapter_scroll_anchor = (context, focus_row)
+    return next_scroll
 
 
 def _note_selected_spans(c: Controller) -> dict[int, tuple[int, int]]:

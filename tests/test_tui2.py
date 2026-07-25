@@ -1373,6 +1373,89 @@ def test_chapter_and_window_share_centered_focus_scrolling(tmp_notes):
     ) == 6
 
 
+def test_chapter_hidden_anchor_moves_on_first_down_and_resets(tmp_notes):
+    class FakeWindow:
+        def addstr(self, y, x, text, attr):
+            pass
+
+    screen = type("FakeScreen", (), {"stdscr": FakeWindow()})()
+    lines = [(f"line {i}", tui.KIND_NORMAL) for i in range(30)]
+
+    chapter = make_controller()
+    chapter.scope = "chapter"
+    scroll = tui._draw_pane(
+        screen, chapter, lines, 0,
+        top=0, body_h=9, x=0, w=80, scroll=0, color=False,
+    )
+    assert scroll == 0
+
+    scroll = tui._draw_pane(
+        screen, chapter, lines, 3,
+        top=0, body_h=9, x=0, w=80, scroll=scroll, color=False,
+    )
+    assert scroll == 3
+
+    scroll = tui._draw_pane(
+        screen, chapter, lines, 0,
+        top=0, body_h=9, x=0, w=80, scroll=scroll, color=False,
+    )
+    assert scroll == 0
+
+    window = make_controller()
+    window.scope = "window"
+    scroll = tui._draw_pane(
+        screen, window, lines, 0,
+        top=0, body_h=9, x=0, w=80, scroll=0, color=False,
+    )
+    scroll = tui._draw_pane(
+        screen, window, lines, 3,
+        top=0, body_h=9, x=0, w=80, scroll=scroll, color=False,
+    )
+    assert scroll == 0
+
+    scroll = tui._draw_pane(
+        screen, chapter, lines, 3,
+        top=0, body_h=7, x=0, w=80, scroll=0, color=False,
+    )
+    assert scroll == 0
+
+    changed_lines = [("new", tui.KIND_NORMAL), *lines]
+    scroll = tui._draw_pane(
+        screen, chapter, changed_lines, 4,
+        top=0, body_h=7, x=0, w=80, scroll=scroll, color=False,
+    )
+    assert scroll == 1
+
+
+def test_chapter_first_down_scrolls_real_rendered_verse_block(tmp_notes):
+    class FakeWindow:
+        def addstr(self, y, x, text, attr):
+            pass
+
+    screen = type("FakeScreen", (), {"stdscr": FakeWindow()})()
+    c = make_controller()
+    c.commit()
+    c.scope = "chapter"
+    c.move_focus(-100)
+
+    lines, focus_line = c.render_content()
+    scroll = tui._draw_pane(
+        screen, c, lines, focus_line,
+        top=0, body_h=9, x=0, w=80, scroll=0, color=False,
+    )
+    assert scroll == 0
+
+    c.move_focus(1)
+    lines, focus_line = c.render_content()
+    scroll = tui._draw_pane(
+        screen, c, lines, focus_line,
+        top=0, body_h=9, x=0, w=80, scroll=scroll, color=False,
+    )
+
+    assert scroll > 0
+    assert tui.KIND_FOCUS not in {kind for _text, kind in lines}
+
+
 def test_open_settings_and_toggle_lang(tmp_notes):
     c = make_controller()
     c.open_settings()
