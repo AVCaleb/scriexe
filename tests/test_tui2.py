@@ -447,6 +447,76 @@ def test_exit_word_view():
     assert c.word_idx is None
 
 
+# ---- two-pane word view (left: definition, right: occurrences) -------------
+
+def test_build_word_panels_splits_definition_and_occurrences():
+    c = make_controller()
+    _drill_to_1pet_3_18_word(c, 7)
+    c.commit()
+    left, right, right_focus = c._build_word_panels()
+    # left panel: header + gloss + tokens + translations
+    left_texts = [t for t, _ in left]
+    assert any("word study" in t for t in left_texts)
+    assert any("gloss" in t for t in left_texts)
+    assert any(tui.KIND_TOKEN in k for _, k in left)
+    # right panel: blank + occurrences header + occurrence lines
+    assert right[0] == ("", tui.KIND_NOTE)
+    assert "occurrences" in right[1][0]
+    occ_lines = [t for t, k in right if k in (tui.KIND_OCCUR, tui.KIND_OCCUR_SEL)]
+    assert len(occ_lines) > 0
+    # right_focus points to the current occurrence within right
+    assert 0 <= right_focus < len(right)
+    assert right[right_focus][1] == tui.KIND_OCCUR_SEL
+
+
+def test_word_panels_right_focus_follows_cursor():
+    c = make_controller()
+    _drill_to_1pet_3_18_word(c, 7)
+    c.commit()
+    _, _, rf0 = c._build_word_panels()
+    c.move_word_cursor(1)
+    _, _, rf1 = c._build_word_panels()
+    assert rf1 == rf0 + 1
+    c.move_word_cursor(-1)
+    _, _, rf2 = c._build_word_panels()
+    assert rf2 == rf0
+
+
+def test_word_scroll_resets_on_enter_word_view():
+    c = make_controller()
+    _drill_to_1pet_3_18_word(c, 7)
+    c.commit()
+    c.word_scroll = 99  # simulate stale scroll
+    c._enter_word_view()
+    assert c.word_scroll == 0
+
+
+def test_render_word_combined_still_has_all_content():
+    """render_content() still returns combined lines for nav preview / compat."""
+    c = make_controller()
+    _drill_to_1pet_3_18_word(c, 7)
+    c.commit()
+    lines, focus = c.render_content()
+    kinds = [k for _, k in lines]
+    assert tui.KIND_TOKEN in kinds
+    assert tui.KIND_OCCUR in kinds or tui.KIND_OCCUR_SEL in kinds
+    assert any("word study" in t for t, _ in lines)
+    # focus line points to the selected occurrence
+    assert 0 <= focus < len(lines)
+    assert lines[focus][1] == tui.KIND_OCCUR_SEL
+
+
+def test_word_pane_widths_sensible():
+    lw, rx = tui._word_pane_widths(80)
+    assert lw >= 24
+    assert rx == lw + 1
+    assert 80 - rx >= 28  # right pane wide enough
+    # narrow terminal: left shrinks to keep right usable
+    lw2, rx2 = tui._word_pane_widths(50)
+    assert lw2 >= 18
+    assert 50 - rx2 >= 20
+
+
 def test_command_word_renders_result_view():
     c = make_controller()
     c.lang = "en"

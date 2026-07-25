@@ -295,6 +295,7 @@ class Controller:
         self.word_idx: int | None = None        # focused word occurrence
         self.word_result: dict = {}
         self.word_cursor: int = 0
+        self.word_scroll: int = 0       # right-pane scroll for two-pane word view
         self.result_lines: list[tuple[str, str]] = []
         self.result_items: list[tuple[int, int, int]] = []
         self.result_cursor: int = 0
@@ -843,20 +844,28 @@ class Controller:
                               KIND_NOTE))
         return lines, focus_line
 
-    def _render_word(self) -> tuple[list[tuple[str, str]], int]:
+    def _build_word_panels(self) -> tuple[list[tuple[str, str]], list[tuple[str, str]], int]:
+        """Build left (definition) and right (occurrences) panel lines.
+
+        Returns ``(left_lines, right_lines, right_focus_row)`` where
+        *right_focus_row* is the row index within *right_lines* that should
+        stay visible (the current occurrence under the cursor), or ``-1``.
+        """
         n = self.focus
         widx = self.word_idx
         b = n.book()
         vref = refs.Ref(b, n.chapter, n.verse, n.chapter, n.verse)
-        lines: list[tuple[str, str]] = []
         r = self.word_result
         lemma = r.get("lemma", "")
         strongs = r.get("strongs", "")
         gloss = r.get("gloss", "")
-        lines.append((f"{_reference_label(b, n.chapter, n.verse, self.lang)} · {tr(self.lang, 'word_study')} · {lemma} ({strongs or '?'})",
-                      KIND_HEADER))
+
+        # ---- left panel: definition / gloss / context ----------------------
+        left: list[tuple[str, str]] = []
+        left.append((f"{_reference_label(b, n.chapter, n.verse, self.lang)} · {tr(self.lang, 'word_study')} · {lemma} ({strongs or '?'})",
+                     KIND_HEADER))
         if gloss:
-            lines.append((f"  " + tr(self.lang, "gloss")
+            left.append((f"  " + tr(self.lang, "gloss")
                          + f": {gloss}" + tr(self.lang, "gloss_source"), KIND_LABEL))
         words = corpus.get_words(vref, ORIG["nt" if b.nt else "ot"])
         toks = [f"[{_surface(w)}]" if w.idx == widx else _surface(w) for w in words]
@@ -864,11 +873,11 @@ class Controller:
             original = ORIG["nt" if b.nt else "ot"]
             label = display.LABELS.get(original, "ORIG")
             kind = RTL_PREFIX + KIND_TOKEN if original == "wlc" else KIND_TOKEN
-            lines.append((_version_line(label, " ".join(toks)), kind))
+            left.append((_version_line(label, " ".join(toks)), kind))
         vers = self.effective_versions()
         texts, gnotes = _gather(vref, vers)
         for note in gnotes:
-            lines.append((f"> {note}", KIND_MSG))
+            left.append((f"> {note}", KIND_MSG))
         for version in vers:
             if version in _word_versions():
                 continue
@@ -877,21 +886,35 @@ class Controller:
             label = display.LABELS.get(version, version.upper())
             t = texts[version].get((n.chapter, n.verse))
             if t:
-                lines.append((_version_line(label, t), KIND_NORMAL))
+                left.append((_version_line(label, t), KIND_NORMAL))
         by_book = r.get("by_book", {})
         if by_book:
-            counts = ", ".join(f"{k}: {n}" for k, n in sorted(by_book.items())[:8])
-            lines.append((f"  " + tr(self.lang, "in_corpus") + f": {counts}", KIND_LABEL))
+            counts = ", ".join(f"{k}: {cnt}" for k, cnt in sorted(by_book.items())[:8])
+            left.append((f"  " + tr(self.lang, "in_corpus") + f": {counts}", KIND_LABEL))
+
+        # ---- right panel: occurrence list (scrollable) ---------------------
         occ = r.get("occurrences", [])
-        lines.append(("", KIND_NOTE))
-        lines.append(("  " + tr(self.lang, "occurrences", n=len(occ)), KIND_LABEL))
-        occurrence_start = len(lines)
+        right: list[tuple[str, str]] = []
+        right.append(("", KIND_NOTE))
+        right.append(("  " + tr(self.lang, "occurrences", n=len(occ)), KIND_LABEL))
         for i, (ver, osis, ch, v, surface, morph) in enumerate(occ):
             mark = "▶" if i == self.word_cursor else " "
             mlbl = search.greek_morph_label(morph)
-            lines.append((f" {mark} {osis} {ch}:{v}  {surface}  ({mlbl})",
+            right.append((f" {mark} {osis} {ch}:{v}  {surface}  ({mlbl})",
                           KIND_OCCUR_SEL if i == self.word_cursor else KIND_OCCUR))
-        return lines, (occurrence_start + self.word_cursor if occ else 2)
+        right_focus = 2 + self.word_cursor if occ else -1
+        return left, right, right_focus
+
+    def _render_word(self) -> tuple[list[tuple[str, str]], int]:
+        """Combined view (used by ``render_content`` for tests / nav preview).
+
+        The curses driver uses :meth:`_build_word_panels` directly to render
+        the two-pane layout.
+        """
+        left, right, rf = self._build_word_panels()
+        lines = left + right
+        focus = len(left) + rf if rf >= 0 else max(0, len(left) - 1)
+        return lines, focus
 
     def editor_lines(self) -> list[tuple[str, str]]:
         """Lines for the bottom editor pane (header + note buffer)."""
@@ -1007,6 +1030,7 @@ class Controller:
         self.message = ""
 
     def _enter_word_view(self):
+        self.word_scroll = 0
         wref = refs.Ref(self.focus.book(), self.focus.chapter, self.focus.verse,
                         self.focus.chapter, self.focus.verse)
         words = corpus.get_words(wref, ORIG["nt" if self.focus.book().nt else "ot"])
@@ -1544,14 +1568,15 @@ The Words column requires the optional SBLGNT or WLC original-language data; Str
 # Reading scopes
 The scope controls how much text surrounds the focused verse. Press z to cycle through the three modes.
 $ window   show verses before and after the focus; + and - change the radius
-$ chapter  show the complete chapter
+$ chapter  show the complete chapter; the viewport follows an invisible verse focus
 $ verse    show only the focused verse and its attached note area
-In reading mode, j/k moves the focused verse. [ opens the previous chapter and ] opens the next chapter, starting at verse 1 and crossing book boundaries. y copies the highlighted verse reference and all displayed translations to the system clipboard. g/G jumps to the first/last verse in the current study set. Ctrl-D and Ctrl-U scroll by half a screen without changing the focused verse.
+In reading mode, j/k moves the focused verse. [ opens the previous chapter and ] opens the next chapter, starting at verse 1 and crossing book boundaries. y copies the focused verse reference and all displayed translations to the system clipboard. g/G jumps to the first/last verse in the current study set. Ctrl-D and Ctrl-U move the focus five verses down/up.
+Window and Verse scopes mark the focused verse. Chapter scope keeps the full chapter visually unhighlighted while following every successful focus movement immediately, including the first movement near a chapter boundary. Copy, notes, bookmarks, and saved reading position still use that invisible focus.
 WLC Hebrew scripture body rows align to the pane's right edge; version labels and all other translations remain left-aligned.
 
 # Word study
-From NAV, drill into Words and press Enter on a Greek or Hebrew form. The word view shows the selected form in context, its lemma/Strong's information when available, morphology, and occurrences in the installed corpus.
-$ j / k       select an occurrence
+From NAV, drill into Words and press Enter on a Greek or Hebrew form. The word view uses two side-by-side panes: the left pane shows the gloss, the original-language form in context, and translations (fixed, no scroll); the right pane lists every occurrence in the installed corpus with a selection cursor.
+$ j / k       select an occurrence (right pane scrolls)
 $ Ctrl-U/D   move five occurrences up / down
 $ g / G      jump to the first / last occurrence
 $ Enter       open the selected occurrence in its verse
@@ -1564,19 +1589,21 @@ $ Esc          save and leave the inline editor
 $ Ctrl-C       discard this editing session
 $ Arrow keys   move the inline editor cursor
 Notes are stored as local Markdown files. A pencil mark identifies verses that already have notes.
-Optional Vim-style note keys are disabled by default and can be enabled in Settings for the inline editor. The note opens in Normal mode, so you can yank text without typing: press i/a to insert, Esc to return to Normal. Normal/Visual modes make system clipboard copy and paste convenient: yy copies a line; v/V selects and y copies; p/P pastes; :wq or ZZ saves; :q! or ZQ discards; :q leaves an unchanged note without saving.
+Optional Vim-style note keys are disabled by default and can be enabled in Settings for the inline editor. The note opens in Normal mode, so you can yank text without typing: press i/a to insert, Esc to return to Normal. Normal/Visual modes make system clipboard copy and paste convenient: yy copies a line; v/V selects and y copies; p/P pastes; :wq or ZZ saves; :q!, :!q, or ZQ discards; :q leaves an unchanged note without saving.
 For IME-heavy Chinese input, use :set editor popup. The popup editor accepts normal terminal input and ignores Vim-style keys; press Ctrl-D to finish or Ctrl-C to cancel. A blank submission keeps the existing note.
 
 # Find in preview
 Press / in ordinary verse view with NAV closed to search the currently rendered translations and visible notes. This is a literal, case-insensitive search rather than a regular expression. It never searches old Results, Help, Settings, Word, or NAV content.
 $ n / Down    move to the next match
 $ N / Up      move to the previous match
+$ Ctrl-U/D   move five matches up / down
+$ g / G      jump to the first / last match
 $ Enter       accept the current viewport and clear highlighting
 $ Esc         clear find and resume normal verse navigation
 Submitting an empty pattern also clears find.
 
 # Corpus search
-:search performs a regular-expression search across the currently enabled versions that are installed locally. Every row identifies its source, such as [ASV] or [CUVS]. This is broader than /, which searches only the current verse preview.
+:search performs a regular-expression search across the currently enabled versions that are installed locally. The Results heading reports both the total hit count and a count for each translation. Every row identifies its source, such as [ASV] or [CUVS]. This is broader than /, which searches only the current verse preview.
 $ :search hope
 $ :search faith|hope
 In Results, use j/k to move the visible selection, Ctrl-U/D to move five, g/G to jump to the first/last, Enter to open that verse, and Esc or h to return to the pre-search verse.
@@ -1683,14 +1710,15 @@ $ Esc 或 q                 关闭导航，回到已选定的阅读位置
 # 阅读范围
 阅读范围决定焦点经节周围显示多少上下文。按 z 在三种模式之间循环。
 $ window   显示焦点前后的经节；使用 + 和 - 调整范围
-$ chapter  显示完整章节
+$ chapter  显示完整章节；视窗跟随不可见的经节焦点
 $ verse    只显示焦点经节及其笔记区域
-在经文模式中，j/k 移动焦点经节；[ 打开上一章，] 打开下一章，均从第 1 节开始并可跨书卷；y 把高亮经节的引用和所有显示译本复制到系统剪贴板；g/G 跳到当前研读选段的第一节/最后一节；Ctrl-D 与 Ctrl-U 滚动半屏但不改变焦点。
+在经文模式中，j/k 移动焦点经节；[ 打开上一章，] 打开下一章，均从第 1 节开始并可跨书卷；y 把焦点经节的引用和所有显示译本复制到系统剪贴板；g/G 跳到当前研读选段的第一节/最后一节；Ctrl-D 与 Ctrl-U 向下/向上移动五节。
+Window 和 Verse 范围会标出焦点经节；Chapter 范围不显示高亮，使整章画面保持简洁，但每次焦点成功移动时视窗都会立即跟随，包括章节边界附近的第一次移动。复制、笔记、书签和阅读位置保存仍以这个不可见焦点为准。
 WLC 希伯来文经文正文的每一行都会对齐窗格右边缘；译本标签和其他译本仍保持左对齐。
 
 # 原文词汇研究
-在导航器中进入“词汇”列，对希腊文或希伯来文词形按 Enter。词汇视图会显示该词在经文中的位置、lemma、Strong's 信息、词形分析，以及已安装语料中的出现位置。
-$ j / k       选择一个出现位置
+在导航器中进入“词汇”列，对希腊文或希伯来文词形按 Enter。词汇视图采用左右两栏布局：左栏显示释义、原文词形及其上下文、译文（固定不滚动）；右栏列出该词在已安装语料中的所有出现位置，并带有选择光标。
+$ j / k       选择出现位置（右栏滚动）
 $ Ctrl-U/D   向上 / 向下移动五个出现位置
 $ g / G      跳到第一个 / 最后一个出现位置
 $ Enter       打开该出现位置所在的经节
@@ -1703,19 +1731,21 @@ $ Esc          保存并退出内嵌编辑器
 $ Ctrl-C       放弃本次编辑
 $ 方向键       移动内嵌编辑器光标
 笔记以本地 Markdown 文件保存。已有笔记的经节旁会显示铅笔标记。
-可选的 Vim 风格笔记键位默认关闭，可在设置页为内嵌编辑器启用。笔记以普通模式打开，可直接抽取文本而无需进入插入：按 i/a 插入，Esc 回到普通模式。普通与可视模式便于使用系统剪贴板复制粘贴：yy 复制整行；v/V 选择后按 y 复制；p/P 粘贴；:wq 或 ZZ 保存；:q! 或 ZQ 放弃；:q 在未修改时直接退出不保存。
+可选的 Vim 风格笔记键位默认关闭，可在设置页为内嵌编辑器启用。笔记以普通模式打开，可直接抽取文本而无需进入插入：按 i/a 插入，Esc 回到普通模式。普通与可视模式便于使用系统剪贴板复制粘贴：yy 复制整行；v/V 选择后按 y 复制；p/P 粘贴；:wq 或 ZZ 保存；:q!、:!q 或 ZQ 放弃；:q 在未修改时直接退出不保存。
 中文输入法较多时，可使用 :set editor popup。弹出编辑器使用普通终端输入且忽略 Vim 键位；Ctrl-D 完成，Ctrl-C 取消；空白提交会保留原笔记。
 
 # 当前预览内查找
 在普通经文视图且导航器关闭时，按 / 查找当前已渲染的译本和可见笔记。这是忽略大小写的字面查找，不是正则表达式；它绝不会搜索旧结果、帮助、设置、词汇或导航内容。
 $ n / 下方向键    下一个匹配
 $ N / 上方向键    上一个匹配
+$ Ctrl-U/D        向上 / 向下移动五个匹配
+$ g / G           跳到第一个 / 最后一个匹配
 $ Enter            接受当前滚动位置并清除高亮
 $ Esc              清除查找，恢复普通经节导航
 提交空内容也会清除查找。
 
 # 语料库搜索
-:search 使用正则表达式搜索当前已启用且安装在本地的译本。每条结果都会标明来源，例如 [ASV] 或 [CUVS]；它比只查找当前经文预览的 / 范围更广。
+:search 使用正则表达式搜索当前已启用且安装在本地的译本。结果标题同时显示总命中数和各译本命中数；每条结果都会标明来源，例如 [ASV] 或 [CUVS]。它比只查找当前经文预览的 / 范围更广。
 $ :search hope
 $ :search faith|hope
 在结果中使用 j/k 移动可见选项，Ctrl-U/D 移动五项，g/G 跳到首末，Enter 打开所选经节，Esc 或 h 返回搜索前的经节。
@@ -2084,12 +2114,17 @@ def run(controller: Controller | None = None) -> int:
                 scroll = _draw_lines(screen, lines, top, body_h, nav_w, w,
                                      scroll, color, focus_line, wrap=True)
             else:
-                pane_focus = (controller.find_hits[controller.find_idx]
-                              if find_active else
-                              (-1 if controller.suppress_focus_once else focus_line))
-                scroll = _draw_pane(screen, controller, lines, pane_focus, top,
-                                    body_h, 0, w, scroll, color)
-                controller.suppress_focus_once = False
+                if controller.view == "word":
+                    scroll = _draw_word_panels(screen, controller, lines,
+                                               top, body_h, w, scroll, color)
+                    controller.suppress_focus_once = False
+                else:
+                    pane_focus = (controller.find_hits[controller.find_idx]
+                                  if find_active else
+                                  (-1 if controller.suppress_focus_once else focus_line))
+                    scroll = _draw_pane(screen, controller, lines, pane_focus, top,
+                                        body_h, 0, w, scroll, color)
+                    controller.suppress_focus_once = False
             _put(screen.stdscr, h - 1, 0, _status(controller), _attr(KIND_STATUS, color), w)
             if controller.editing and not controller.show_help:
                 _position_editor_cursor(screen, controller, top, verse_h, w)
@@ -2430,6 +2465,44 @@ def _line_to_row(lines, line_idx, avail, color, wrap=True):
         return -1
     _, line_row = _build_rows(lines, avail, color, wrap)
     return line_row[line_idx] if line_idx < len(line_row) else -1
+
+
+def _word_pane_widths(w: int) -> tuple[int, int]:
+    """Return ``(left_width, right_x)`` for the two-pane word view.
+
+    The left pane shows the gloss/definition (fixed, no scroll); the right
+    pane shows the scrollable occurrence list.
+    """
+    left_w = max(24, min(w * 2 // 5, 50))
+    # ensure the right pane has at least 28 chars for readable occurrence lines
+    if w - left_w - 1 < 28:
+        left_w = max(18, w - 1 - 28)
+    return left_w, left_w + 1
+
+
+def _draw_word_panels(screen, c, lines, top, body_h, w, scroll, color):
+    """Render the word-study view as two side-by-side panes.
+
+    Left pane  — gloss / definition / context (fixed at top, no scroll).
+    Right pane — occurrence list (scrolls to follow the cursor).
+    """
+    left, right, right_focus = c._build_word_panels()
+    left_w, right_x = _word_pane_widths(w)
+
+    # vertical divider
+    div_attr = _attr(KIND_COLHDR, color)
+    for r in range(body_h):
+        _put(screen.stdscr, top + r, left_w, "│", div_attr, left_w + 1)
+
+    # left pane: always starts at row 0, no scrolling
+    _draw_lines(screen, left, top, body_h, 0, left_w, 0, color,
+                focus_line=-1, wrap=True)
+
+    # right pane: scroll follows the cursor (word_cursor)
+    c.word_scroll = _draw_lines(screen, right, top, body_h, right_x, w,
+                                c.word_scroll, color,
+                                focus_line=right_focus, wrap=True)
+    return c.word_scroll
 
 
 def _draw_pane(screen, c, lines, focus_line, top, body_h, x, w, scroll, color):
