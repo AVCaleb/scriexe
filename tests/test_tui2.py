@@ -473,10 +473,11 @@ def test_word_panels_right_focus_follows_cursor():
     c = make_controller()
     _drill_to_1pet_3_18_word(c, 7)
     c.commit()
-    _, _, rf0 = c._build_word_panels()
+    _, right0, rf0 = c._build_word_panels()
     c.move_word_cursor(1)
-    _, _, rf1 = c._build_word_panels()
-    assert rf1 == rf0 + 1
+    _, right1, rf1 = c._build_word_panels()
+    assert rf1 > rf0                # selection moved down, focus followed
+    assert right1[rf1][1] == tui.KIND_OCCUR_SEL
     c.move_word_cursor(-1)
     _, _, rf2 = c._build_word_panels()
     assert rf2 == rf0
@@ -515,6 +516,31 @@ def test_word_pane_widths_sensible():
     lw2, rx2 = tui._word_pane_widths(50)
     assert lw2 >= 18
     assert 50 - rx2 >= 20
+
+
+def test_word_panels_show_verse_text_under_occurrences():
+    c = make_controller()
+    _drill_to_1pet_3_18_word(c, 7)
+    c.commit()
+    _, right, _ = c._build_word_panels()
+    # after blank + header, each occurrence is followed by a verse-text line
+    dim_lines = [t for t, k in right if k == tui.KIND_DIM]
+    assert len(dim_lines) > 0
+    # the verse text should contain more than just the surface form
+    occ_count = sum(1 for _, k in right if k in (tui.KIND_OCCUR, tui.KIND_OCCUR_SEL))
+    assert len(dim_lines) == occ_count  # one verse text per occurrence
+
+
+def test_word_occurrences_includes_verse_texts():
+    from exeg import search
+    r = search.word_occurrences("G3958")
+    assert "verse_texts" in r
+    occ = r["occurrences"]
+    vt = r["verse_texts"]
+    for ver, osis, ch, v, surface, morph in occ:
+        key = (ver, osis, ch, v)
+        assert key in vt
+        assert len(vt[key]) > len(surface)  # full verse, not just the word
 
 
 def test_command_word_renders_result_view():

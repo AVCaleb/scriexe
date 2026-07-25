@@ -894,15 +894,25 @@ class Controller:
 
         # ---- right panel: occurrence list (scrollable) ---------------------
         occ = r.get("occurrences", [])
+        verse_texts = r.get("verse_texts", {})
         right: list[tuple[str, str]] = []
         right.append(("", KIND_NOTE))
         right.append(("  " + tr(self.lang, "occurrences", n=len(occ)), KIND_LABEL))
+        right_focus = -1
+        line_idx = 2  # after blank + header
         for i, (ver, osis, ch, v, surface, morph) in enumerate(occ):
             mark = "▶" if i == self.word_cursor else " "
             mlbl = search.greek_morph_label(morph)
+            is_sel = i == self.word_cursor
+            if is_sel:
+                right_focus = line_idx
             right.append((f" {mark} {osis} {ch}:{v}  {surface}  ({mlbl})",
-                          KIND_OCCUR_SEL if i == self.word_cursor else KIND_OCCUR))
-        right_focus = 2 + self.word_cursor if occ else -1
+                          KIND_OCCUR_SEL if is_sel else KIND_OCCUR))
+            line_idx += 1
+            vtext = verse_texts.get((ver, osis, ch, v), "")
+            if vtext:
+                right.append((f"     {vtext}", KIND_DIM))
+                line_idx += 1
         return left, right, right_focus
 
     def _render_word(self) -> tuple[list[tuple[str, str]], int]:

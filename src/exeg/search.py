@@ -35,10 +35,8 @@ def greek_morph_label(morph: str) -> str:
 
 
 def _strongs_dicts() -> tuple[dict, dict, dict]:
-    sdir = corpus.corpus_dir() / "strongs"
-
     def load(name):
-        p = sdir / name
+        p = corpus.strongs_path(name)
         return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
 
     return load("greek.json"), load("hebrew.json"), load("greek-lemma-map.json")
@@ -98,9 +96,17 @@ def word_occurrences(query: str) -> dict:
     occurrences = []
     found_lemma = ""
     query_is_strongs = bool(strongs) and not lemma
+    verse_texts: dict[tuple[str, str, int, int], str] = {}
     for version in sorted(corpus.WORD_VERSIONS):
         for b in canon.BOOKS:
-            for w in corpus.read_words(version, b.osis):
+            words = corpus.read_words(version, b.osis)
+            # build verse text cache for this book (single pass)
+            vt: dict[tuple[int, int], list[str]] = {}
+            for w in words:
+                vt.setdefault((w.chapter, w.verse), []).append(
+                    w.surface.replace("/", ""))
+            book_vt = {k: " ".join(v) for k, v in vt.items()}
+            for w in words:
                 if query_is_strongs:
                     hit = w.strongs == strongs
                 else:
@@ -108,6 +114,9 @@ def word_occurrences(query: str) -> dict:
                            or (strongs and w.strongs == strongs))
                 if hit:
                     occurrences.append((version, b.osis, w.chapter, w.verse, w.surface, w.morph))
+                    vkey = (version, b.osis, w.chapter, w.verse)
+                    if vkey not in verse_texts:
+                        verse_texts[vkey] = book_vt.get((w.chapter, w.verse), "")
                     if not found_lemma and w.lemma:
                         found_lemma = unicodedata.normalize("NFC", w.lemma)
     entry = greek.get(strongs) or hebrew.get(strongs) or {}
@@ -116,7 +125,8 @@ def word_occurrences(query: str) -> dict:
         by_book[osis] = by_book.get(osis, 0) + 1
     return {"query": query, "strongs": strongs, "lemma": lemma or found_lemma or entry.get("lemma", ""),
             "gloss": (entry.get("strongs_def", "") or entry.get("kjv_def", "")).strip(),
-            "occurrences": occurrences, "by_book": by_book}
+            "occurrences": occurrences, "by_book": by_book,
+            "verse_texts": verse_texts}
 
 
 def cmd_search(args) -> int:
