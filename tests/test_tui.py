@@ -193,16 +193,16 @@ def test_render_content_chapter_scope_no_dim_or_focus_highlight():
     kinds = {k for _, k in lines}
     assert tui.KIND_DIM not in kinds
     assert tui.KIND_FOCUS not in kinds        # chapter scope does not highlight
-    assert focus_line == -1                   # chapter scope allows free scrolling
-    assert any("3:18" in t for t, _ in lines)  # verse still rendered
+    assert focus_line >= 0                     # scroll still tracks the focus verse
+    assert "3:18" in lines[focus_line][0]
 
 
-def test_chapter_scope_scroll_is_not_clamped_to_focus():
+def test_chapter_scope_scroll_tracks_focus():
     c = make_controller()
     c.commit()
     c.scope = "chapter"
     lines, focus_line = c.render_content()
-    assert focus_line == -1  # no focus_line → _draw_lines won't clamp scroll
+    assert focus_line >= 0  # focus_line set → _draw_lines will scroll to keep it visible
 
 
 def test_verse_view_ctrl_ud_moves_five_verses():

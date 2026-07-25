@@ -816,7 +816,7 @@ class Controller:
             is_highlighted = is_focus and self.scope != "chapter"
             lines.append((hdr, KIND_FOCUS if is_highlighted else
                           (KIND_DIM if self.scope == "window" else KIND_HEADER)))
-            if is_focus and self.scope != "chapter":
+            if is_focus:
                 focus_line = len(lines) - 1
             for version in vers:
                 if version not in texts:
@@ -1483,7 +1483,11 @@ class Controller:
             return f"bad pattern: {e}"
         if not hits:
             return tr(self.lang, "no_matches")
-        self.result_title = f"search: {arg} — {len(hits)} hits"
+        # Per-version counts
+        from collections import Counter
+        ver_counts = Counter(h[0] for h in hits)
+        count_str = "  ·  ".join(f"{v.upper()}: {n}" for v, n in ver_counts.items())
+        self.result_title = f"search: {arg} — {len(hits)} hits ({count_str})"
         self.result_items = [(_osis_index(o[1]), o[2], o[3]) for o in hits]
         self.result_lines = [(self.result_title, KIND_HEADER), ("", KIND_NOTE)]
         for ver, osis, ch, v, text in hits:
