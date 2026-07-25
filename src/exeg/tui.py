@@ -191,6 +191,12 @@ def _surface(w: corpus.Word) -> str:
     return w.surface.replace("/", "")
 
 
+def _reference_label(book: canon.Book, chapter: int, verse: int, lang: str) -> str:
+    """A verse reference shown in only the active interface language."""
+    name = (book.en if lang == "en" else book.zh_abbr)
+    return f"{name} {chapter}:{verse}"
+
+
 def _word_versions() -> list[str]:
     return ["sblgnt", "wlc"]
 
@@ -401,8 +407,7 @@ class Controller:
         ref = refs.Ref(book, n.chapter, n.verse, n.chapter, n.verse)
         versions = self.effective_versions()
         texts, _notices = _gather(ref, versions)
-        lines = [f"{book.en} {n.chapter}:{n.verse} · "
-                 f"{book.zh_abbr} {n.chapter}:{n.verse}"]
+        lines = [_reference_label(book, n.chapter, n.verse, self.lang)]
         for version in versions:
             text = texts.get(version, {}).get((n.chapter, n.verse))
             if text:
@@ -413,7 +418,7 @@ class Controller:
     def copy_highlighted_verse(self):
         n = self.shown()
         ok, error = _copy_clipboard(self.highlighted_verse_text())
-        ref = f"{n.book().en} {n.chapter}:{n.verse}"
+        ref = _reference_label(n.book(), n.chapter, n.verse, self.lang)
         self.message = (tr(self.lang, "copied_verse", ref=ref) if ok else
                         tr(self.lang, "copy_failed", e=error))
 
@@ -802,8 +807,9 @@ class Controller:
             note_mark = ""
             if self.show_verse_marks and notes.has_verse_note(ref.book.osis, ch, v):
                 note_mark = (self.notemark + " ") if self.notemark else ""
-            hdr = f"{note_mark}{ref.book.en} {ch}:{v} · {ref.book.zh_abbr} {ch}:{v}"
-            lines.append((hdr, KIND_FOCUS if is_focus else
+            hdr = f"{note_mark}{_reference_label(ref.book, ch, v, self.lang)}"
+            is_highlighted = is_focus and self.scope != "chapter"
+            lines.append((hdr, KIND_FOCUS if is_highlighted else
                           (KIND_DIM if self.scope == "window" else KIND_HEADER)))
             for version in vers:
                 if version not in texts:
@@ -811,7 +817,7 @@ class Controller:
                 label = display.LABELS.get(version, version.upper())
                 text = texts[version].get((ch, v))
                 body = text if text else f"[not in {label}]"
-                kind = (KIND_FOCUS if is_focus else
+                kind = (KIND_FOCUS if is_highlighted else
                         (KIND_DIM if self.scope == "window" else KIND_NORMAL))
                 if version == "wlc":
                     kind = RTL_PREFIX + kind
@@ -821,11 +827,11 @@ class Controller:
             ntext = notes.read_verse(ref.book.osis, n.chapter, n.verse)
             lines.append(("", KIND_NOTE))
             if ntext:
-                lines.append((f"  {tr(self.lang, 'note_word')}({ref.book.zh_abbr} {n.chapter}:{n.verse}):", KIND_NOTE))
+                lines.append((f"  {tr(self.lang, 'note_word')}({_reference_label(ref.book, n.chapter, n.verse, self.lang)}):", KIND_NOTE))
                 for ln in ntext.rstrip("\n").splitlines():
                     lines.append((f"    {ln}", KIND_NOTE))
             else:
-                lines.append((f"  {tr(self.lang, 'note_word')}({ref.book.zh_abbr} {n.chapter}:{n.verse}): {tr(self.lang, 'note_edit_prompt')}",
+                lines.append((f"  {tr(self.lang, 'note_word')}({_reference_label(ref.book, n.chapter, n.verse, self.lang)}): {tr(self.lang, 'note_edit_prompt')}",
                               KIND_NOTE))
         return lines, focus_line
 
@@ -839,7 +845,7 @@ class Controller:
         lemma = r.get("lemma", "")
         strongs = r.get("strongs", "")
         gloss = r.get("gloss", "")
-        lines.append((f"{b.en} {n.chapter}:{n.verse} · {tr(self.lang, 'word_study')} · {lemma} ({strongs or '?'})",
+        lines.append((f"{_reference_label(b, n.chapter, n.verse, self.lang)} · {tr(self.lang, 'word_study')} · {lemma} ({strongs or '?'})",
                       KIND_HEADER))
         if gloss:
             lines.append((f"  " + tr(self.lang, "gloss") + f": {gloss}", KIND_LABEL))

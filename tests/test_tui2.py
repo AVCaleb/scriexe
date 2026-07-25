@@ -113,10 +113,18 @@ def test_nav_ctrl_u_ctrl_d_move_five_items(tmp_notes):
 def test_highlighted_verse_text_contains_reference_and_visible_versions(tmp_notes):
     c = tui.Controller(intro=True)
     c.nav_visible = False
+    c.lang = "en"
     c.translations = ["cuvs", "asv"]
     text = c.highlighted_verse_text()
-    assert text.startswith("Matthew 1:1 · 太 1:1")
-    assert "和合本" in text and "ASV" in text
+    first = text.splitlines()[0]
+    assert first == "Matthew 1:1"              # English mode omits the Chinese ref
+    assert "太" not in text and "和合本" in text and "ASV" in text
+
+    c.lang = "zh"
+    text_zh = c.highlighted_verse_text()
+    first_zh = text_zh.splitlines()[0]
+    assert first_zh == "太 1:1"                # Chinese mode omits the English ref
+    assert "Matthew" not in text_zh
 
 
 def test_nav_copy_formats_preview_selection(tmp_notes):
