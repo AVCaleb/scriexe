@@ -1040,10 +1040,10 @@ Expected: all tests pass with no warnings or errors.
 - [ ] **Step 6: Run Node launcher tests**
 
 ```bash
-cd npm/scriexe && npm test
+cd npm/scriexe && node --test test/launcher.test.js
 ```
 
-Expected: all launcher tests pass.
+Expected: all launcher tests pass using Node's built-in test runner (the package has no `npm test` script).
 
 - [ ] **Step 7: Run source integrity checks**
 

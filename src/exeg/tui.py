@@ -11,7 +11,9 @@ is the curses driver.
 """
 import curses
 import os
+import platform
 import re
+import shutil
 import subprocess
 import sys
 import unicodedata
@@ -24,9 +26,9 @@ ORIG = {"nt": "sblgnt", "ot": "wlc"}
 LOCAL_DEFAULT = ["cuvs", "asv"]
 
 SCOPES = ("window", "chapter", "verse")
-DEFAULT_BOOK = "1Pet"
-DEFAULT_CHAPTER = 3
-DEFAULT_VERSE = 18
+DEFAULT_BOOK = "Matt"
+DEFAULT_CHAPTER = 1
+DEFAULT_VERSE = 1
 DEFAULT_WINDOW = 5
 
 
@@ -154,6 +156,37 @@ def _osis_index(osis: str) -> int:
     return next(i for i, b in enumerate(canon.BOOKS) if b.osis == osis)
 
 
+def _default_node() -> Node:
+    return Node(_osis_index(DEFAULT_BOOK), DEFAULT_CHAPTER, DEFAULT_VERSE)
+
+
+def _node_from_meta(meta: dict, intro: bool = False) -> Node:
+    if intro or not meta.get("setup_done"):
+        return _default_node()
+    value = meta.get("last_read")
+    if not isinstance(value, dict):
+        return _default_node()
+    try:
+        book_idx = _osis_index(str(value["book"]))
+        chapter = int(value["chapter"])
+        verse = int(value["verse"])
+        book = canon.BOOKS[book_idx]
+        if not 1 <= chapter <= book.chapters:
+            raise ValueError
+        maximum = _max_verse(book, chapter)
+        if verse < 1 or (maximum and verse > maximum):
+            raise ValueError
+        return Node(book_idx, chapter, verse)
+    except (KeyError, TypeError, ValueError, StopIteration):
+        return _default_node()
+
+
+def _write_meta_updates(**updates) -> None:
+    meta = notes.read_meta()
+    meta.update(updates)
+    notes.write_meta(meta)
+
+
 def _surface(w: corpus.Word) -> str:
     return w.surface.replace("/", "")
 
@@ -168,17 +201,73 @@ def _key_set(env_var: str) -> bool:
     return setup.key_is_set(env_var)
 
 
+def _clipboard_command(system=None, which=shutil.which) -> list[str] | None:
+    system = system or platform.system()
+    candidates = {
+        "Darwin": [(["pbcopy"], "pbcopy")],
+        "Windows": [(["clip"], "clip")],
+    }.get(system, [(["wl-copy"], "wl-copy"),
+                   (["xclip", "-selection", "clipboard"], "xclip"),
+                   (["xsel", "--clipboard", "--input"], "xsel")])
+    return next((command for command, executable in candidates if which(executable)), None)
+
+
+def _clipboard_read_command(system=None, which=shutil.which) -> list[str] | None:
+    system = system or platform.system()
+    candidates = {
+        "Darwin": [(["pbpaste"], "pbpaste")],
+        "Windows": [(["powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw"],
+                     "powershell")],
+    }.get(system, [(["wl-paste", "--no-newline"], "wl-paste"),
+                   (["xclip", "-selection", "clipboard", "-o"], "xclip"),
+                   (["xsel", "--clipboard", "--output"], "xsel")])
+    return next((command for command, executable in candidates if which(executable)), None)
+
+
+def _copy_clipboard(text: str, system=None, which=shutil.which,
+                    runner=subprocess.run) -> tuple[bool, str]:
+    command = _clipboard_command(system, which)
+    if command is None:
+        return False, "no clipboard command found"
+    try:
+        result = runner(command, input=text, encoding="utf-8",
+                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                        check=False)
+    except OSError as e:
+        return False, str(e)
+    if result.returncode != 0:
+        error = (result.stderr or "").strip()
+        return False, error or f"clipboard command exited {result.returncode}"
+    return True, ""
+
+
+def _read_clipboard(system=None, which=shutil.which,
+                    runner=subprocess.run) -> tuple[str | None, str]:
+    command = _clipboard_read_command(system, which)
+    if command is None:
+        return None, "no clipboard command found"
+    try:
+        result = runner(command, capture_output=True, encoding="utf-8", check=False)
+    except OSError as e:
+        return None, str(e)
+    if result.returncode != 0:
+        error = (result.stderr or "").strip()
+        return None, error or f"clipboard command exited {result.returncode}"
+    return result.stdout, ""
+
+
 # --------------------------------------------------------------------------- #
 # Controller (pure logic, no curses)
 # --------------------------------------------------------------------------- #
 
 class Controller:
     def __init__(self, versions: list[str] | None = None, intro: bool = False):
-        bi = canon.find_book(DEFAULT_BOOK).osis
-        self.book_idx = next(i for i, b in enumerate(canon.BOOKS) if b.osis == bi)
-        self.chapter = DEFAULT_CHAPTER
-        self.verse = DEFAULT_VERSE
-        self.focus = Node(self.book_idx, self.chapter, self.verse)
+        m = notes.read_meta()
+        initial = _node_from_meta(m, intro)
+        self.book_idx = initial.book_idx
+        self.chapter = initial.chapter
+        self.verse = initial.verse
+        self.focus = initial
         self.sel = Node(self.book_idx, self.chapter, self.verse)
         self.sel_word = 1                       # navigator's word selection
         self.nav_visible = True
@@ -211,6 +300,9 @@ class Controller:
         self.note_cx: int = 0
         self.note_target: tuple = ()
         self.note_dirty = False
+        self.note_mode = "insert"
+        self.note_anchor: tuple[int, int] | None = None
+        self.note_pending = ""
         self.editor_mode = "inline"             # "inline" | "popup"
         self.show_help = False                   # `?` overlay
         self.help_scroll = 0
@@ -235,7 +327,6 @@ class Controller:
 
         # settings
         self.highlight = "auto"
-        m = notes.read_meta()
         self.lang = m.get("lang", "en")
         if self.lang not in ("en", "zh"):
             self.lang = "en"
@@ -245,6 +336,7 @@ class Controller:
             self.highlight = m["highlight"]
         if m.get("editor") in ("inline", "popup"):
             self.editor_mode = m["editor"]
+        self.vim_keys = bool(m.get("vim_keys", False))
         if isinstance(m.get("translations"), list) and m["translations"]:
             self.translations = list(m["translations"])
         self.show_verse_marks = bool(m.get("show_verse_marks", True))
@@ -303,6 +395,28 @@ class Controller:
         hi = _max_verse(b, n.chapter) or 1
         return refs.Ref(b, n.chapter, 1, n.chapter, hi)
 
+    def highlighted_verse_text(self) -> str:
+        n = self.shown()
+        book = n.book()
+        ref = refs.Ref(book, n.chapter, n.verse, n.chapter, n.verse)
+        versions = self.effective_versions()
+        texts, _notices = _gather(ref, versions)
+        lines = [f"{book.en} {n.chapter}:{n.verse} · "
+                 f"{book.zh_abbr} {n.chapter}:{n.verse}"]
+        for version in versions:
+            text = texts.get(version, {}).get((n.chapter, n.verse))
+            if text:
+                label = display.LABELS.get(version, version.upper())
+                lines.append(f"{label}  {text}")
+        return "\n".join(lines) + "\n"
+
+    def copy_highlighted_verse(self):
+        n = self.shown()
+        ok, error = _copy_clipboard(self.highlighted_verse_text())
+        ref = f"{n.book().en} {n.chapter}:{n.verse}"
+        self.message = (tr(self.lang, "copied_verse", ref=ref) if ok else
+                        tr(self.lang, "copy_failed", e=error))
+
     # ---- focus changes ----------------------------------------------------
 
     def _set_focus_state(self, node: Node, view="verse", word_idx=None):
@@ -315,9 +429,15 @@ class Controller:
         self.word_idx = word_idx
 
     def goto(self, node: Node, view="verse", word_idx=None):
-        """Change focus (no history — `b` returns to the bookmark, set with `p`)."""
+        """Change and persist focus (`b` returns to the session bookmark)."""
         self.clear_find()
         self._set_focus_state(node, view, word_idx)
+        self._persist_reading_position()
+
+    def _persist_reading_position(self):
+        _write_meta_updates(last_read={"book": self.focus.book().osis,
+                                       "chapter": self.focus.chapter,
+                                       "verse": self.focus.verse})
 
     def set_bookmark(self):
         """Record/replace the bookmark at the current position."""
@@ -331,6 +451,7 @@ class Controller:
             return
         node, view, word = self.bookmark
         self._set_focus_state(node, view, word)
+        self._persist_reading_position()
         self.nav_visible = False
         self.message = tr(self.lang, "returned", ref=f"{node.book().en} {node.chapter}:{node.verse}")
 
@@ -425,16 +546,19 @@ class Controller:
             self.finish_intro()
 
     def finish_intro(self):
+        self._set_focus_state(_default_node())
         self._persist_meta()
-        m = notes.read_meta()
-        m["setup_done"] = True
-        notes.write_meta(m)
+        _write_meta_updates(setup_done=True,
+                            last_read={"book": self.focus.book().osis,
+                                       "chapter": self.focus.chapter,
+                                       "verse": self.focus.verse})
         self.intro = False
         self.message = ""
 
     def render_intro(self):
         title = "exeg — first-run setup  (j/k move · Enter select · choose Begin to start)"
         lines = [(title, KIND_HEADER), ("─" * 60, KIND_COLHDR), ("", KIND_NORMAL)]
+        focus_line = -1
         for i, it in enumerate(self.intro_items()):
             t = it["type"]
             if t == "section":
@@ -456,7 +580,9 @@ class Controller:
             prefix = "  ▶ " if sel else "    "
             lines.append((f"{prefix}{mark} {it['label']}",
                           KIND_OCCUR_SEL if sel else KIND_OCCUR))
-        return lines, 2
+            if sel:
+                focus_line = len(lines) - 1
+        return lines, focus_line
 
     def settings_items(self):
         from exeg import i18n
@@ -498,6 +624,9 @@ class Controller:
             {"type": "bool", "key": "show_verse_marks", "value": "on",
              "label": "Mark verses that have a note",
              "active": self.show_verse_marks},
+            {"type": "bool", "key": "vim_keys", "value": "on",
+             "label": tr(self.lang, "vim_keys_label"), "active": self.vim_keys},
+            {"type": "note", "label": tr(self.lang, "vim_keys_explain")},
             {"type": "section", "label": "Reset"},
             {"type": "restore", "key": "restore", "value": "restore",
              "label": "Restore all settings to defaults", "active": False},
@@ -534,6 +663,8 @@ class Controller:
             self._pending_optional_fetch = True
         elif it["type"] == "bool" and it["key"] == "show_verse_marks":
             self.show_verse_marks = not self.show_verse_marks
+        elif it["type"] == "bool" and it["key"] == "vim_keys":
+            self.vim_keys = not self.vim_keys
         elif it["type"] == "bool" and it["key"] == "ver":
             if it["value"] in self.translations:
                 self.translations = [v for v in self.translations if v != it["value"]]
@@ -546,6 +677,7 @@ class Controller:
         hint = tr(self.lang, "settings_title")
         lines = [(hint, KIND_HEADER),
                 ("─" * 60, KIND_COLHDR), ("", KIND_NORMAL)]
+        focus_line = -1
         for i, it in enumerate(self.settings_items()):
             t = it["type"]
             if t == "section":
@@ -568,6 +700,8 @@ class Controller:
                 prefix = "  ▶ " if sel else "    "
                 lines.append((f"{prefix}↺ {it['label']}",
                               KIND_OCCUR_SEL if sel else KIND_OCCUR))
+                if sel:
+                    focus_line = len(lines) - 1
                 continue
             else:
                 mark = ""
@@ -575,10 +709,12 @@ class Controller:
             prefix = "  ▶ " if sel else "    "
             lines.append((f"{prefix}{mark} {it['label']}",
                           KIND_OCCUR_SEL if sel else KIND_OCCUR))
+            if sel:
+                focus_line = len(lines) - 1
         lines.append(("", KIND_NORMAL))
         lines.append(("j/k move · Enter toggle/paste · Esc back  ·  Ctrl-C skips a key paste",
                       KIND_NOTE))
-        return lines, 2
+        return lines, focus_line
 
     # ---- note target -------------------------------------------------------
 
@@ -746,7 +882,8 @@ class Controller:
         target = self.note_target
         kind = target[0] if target else "verse"
         n = self.focus
-        hint = tr(self.lang, "esc_save_hint")
+        hint = (tr(self.lang, "vim_note_hint", mode=self.note_mode.upper())
+                if self.vim_keys else tr(self.lang, "esc_save_hint"))
         if kind == "verse":
             head = f"{tr(self.lang, 'note_word')} · {n.book().en} {n.chapter}:{n.verse}  ({hint})"
         elif kind == "word":
@@ -907,6 +1044,26 @@ class Controller:
         ch, v = keys[i]
         self.goto(Node(self.focus.book_idx, ch, v), view="verse", word_idx=None)
 
+    def move_chapter(self, delta: int):
+        if self.view != "verse" or delta == 0:
+            return
+        book_idx = self.focus.book_idx
+        chapter = self.focus.chapter + (1 if delta > 0 else -1)
+        if chapter < 1:
+            if book_idx == 0:
+                chapter = 1
+            else:
+                book_idx -= 1
+                chapter = canon.BOOKS[book_idx].chapters
+        elif chapter > canon.BOOKS[book_idx].chapters:
+            if book_idx == len(canon.BOOKS) - 1:
+                chapter = canon.BOOKS[book_idx].chapters
+            else:
+                book_idx += 1
+                chapter = 1
+        self.study_set = None
+        self.goto(Node(book_idx, chapter, 1), view="verse", word_idx=None)
+
     def move_word_cursor(self, delta: int):
         occ = self.word_result.get("occurrences", [])
         if not occ:
@@ -1009,6 +1166,9 @@ class Controller:
         self.note_cy = 0
         self.note_cx = 0
         self.note_dirty = False
+        self.note_mode = "insert"
+        self.note_anchor = None
+        self.note_pending = ""
         self.editing = True
         self._popup = (self.editor_mode == "popup")
 
@@ -1018,6 +1178,9 @@ class Controller:
             self._save_note(self.note_target, text)
         self.editing = False
         self.note_target = ()
+        self.note_mode = "insert"
+        self.note_anchor = None
+        self.note_pending = ""
         self._popup = False
 
     def insert_char(self, ch):
@@ -1058,6 +1221,100 @@ class Controller:
         if dy != 0:
             cx = min(cx, len(self.note_lines[cy]))
         self.note_cy, self.note_cx = cy, cx
+
+    def note_selection_range(self):
+        if self.note_anchor is None or self.note_mode not in ("visual", "visual_line"):
+            return None
+        start, end = self.note_anchor, (self.note_cy, self.note_cx)
+        return (start, end) if start <= end else (end, start)
+
+    def _selected_note_text(self, linewise: bool = False) -> str:
+        selected = self.note_selection_range()
+        if selected is None:
+            if not linewise:
+                return ""
+            return self.note_lines[self.note_cy] + "\n"
+        (start_y, start_x), (end_y, end_x) = selected
+        if linewise or self.note_mode == "visual_line":
+            return "\n".join(self.note_lines[start_y:end_y + 1]) + "\n"
+        if start_y == end_y:
+            return self.note_lines[start_y][start_x:end_x + 1]
+        parts = [self.note_lines[start_y][start_x:]]
+        parts.extend(self.note_lines[start_y + 1:end_y])
+        parts.append(self.note_lines[end_y][:end_x + 1])
+        return "\n".join(parts)
+
+    def yank_note_selection(self, linewise: bool = False) -> tuple[bool, str]:
+        text = self._selected_note_text(linewise)
+        ok, error = _copy_clipboard(text)
+        if ok:
+            self.note_mode = "normal"
+            self.note_anchor = None
+            self.note_pending = ""
+            self.message = tr(self.lang, "copied_note")
+        else:
+            self.message = tr(self.lang, "copy_failed", e=error)
+        return ok, error
+
+    def _delete_note_selection(self) -> tuple[int, int]:
+        selected = self.note_selection_range()
+        if selected is None:
+            return self.note_cy, self.note_cx
+        (start_y, start_x), (end_y, end_x) = selected
+        if self.note_mode == "visual_line":
+            self.note_lines[start_y:end_y + 1] = [""]
+            return start_y, 0
+        if start_y == end_y:
+            line = self.note_lines[start_y]
+            self.note_lines[start_y] = line[:start_x] + line[end_x + 1:]
+        else:
+            joined = (self.note_lines[start_y][:start_x]
+                      + self.note_lines[end_y][end_x + 1:])
+            self.note_lines[start_y:end_y + 1] = [joined]
+        return start_y, start_x
+
+    def _insert_note_text(self, y: int, x: int, text: str) -> None:
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        parts = text.split("\n")
+        line = self.note_lines[y]
+        before, after = line[:x], line[x:]
+        if len(parts) == 1:
+            self.note_lines[y] = before + parts[0] + after
+            self.note_cy = y
+            self.note_cx = x + max(0, len(parts[0]) - 1)
+        else:
+            replacement = [before + parts[0], *parts[1:-1], parts[-1] + after]
+            self.note_lines[y:y + 1] = replacement
+            self.note_cy = y + len(replacement) - 1
+            self.note_cx = max(0, len(parts[-1]) - 1)
+        self.note_dirty = True
+
+    def paste_note_text(self, text: str, before: bool = False,
+                        replace_selection: bool = False) -> None:
+        if replace_selection:
+            y, x = self._delete_note_selection()
+        else:
+            y, x = self.note_cy, self.note_cx
+            if not before:
+                x = min(len(self.note_lines[y]), x + 1)
+        self._insert_note_text(y, x, text)
+        self.note_mode = "normal"
+        self.note_anchor = None
+        self.note_pending = ""
+        _vim_clamp_cursor(self)
+
+    def paste_note_clipboard(self, before: bool = False,
+                             replace_selection: bool = False) -> bool:
+        text, error = _read_clipboard()
+        if text is None:
+            self.message = tr(self.lang, "paste_failed", e=error)
+            return False
+        if text == "":
+            self.message = tr(self.lang, "paste_empty")
+            return False
+        self.paste_note_text(text, before, replace_selection)
+        self.message = tr(self.lang, "pasted_note")
+        return True
 
     # ---- commands ----------------------------------------------------------
 
@@ -1159,16 +1416,16 @@ class Controller:
                 ":set editor popup, :set window N, :set notemark <char>)")
 
     def _persist_meta(self):
-        notes.write_meta({"highlight": self.highlight, "editor": self.editor_mode,
-                           "window": self.window, "lang": self.lang,
-                           "translations": list(self.translations),
-                           "show_verse_marks": self.show_verse_marks,
-                           "notemark": self.notemark})
+        _write_meta_updates(highlight=self.highlight, editor=self.editor_mode,
+                            window=self.window, lang=self.lang,
+                            translations=list(self.translations),
+                            show_verse_marks=self.show_verse_marks,
+                            notemark=self.notemark, vim_keys=self.vim_keys)
 
     DEFAULT_SETTINGS = {"highlight": "auto", "editor_mode": "inline", "window": 5,
                         "lang": "en", "translations": ["cuvs", "asv"],
                         "show_verse_marks": True, "notemark": "✎",
-                        "_versions_custom": False}
+                        "vim_keys": False, "_versions_custom": False}
 
     def restore_defaults(self):
         """Reset every preference to its default (keeps setup_done; does NOT
@@ -1241,8 +1498,8 @@ class Controller:
 HELP_MANUAL = {
     "en": """\
 exeg TUI — keys
- NAV   Tab toggle nav · j/k move · l drill · h up · Enter commit · Esc exit
- VERSE j/k next/prev verse · z scope · +/- window · b back · p bookmark
+ NAV   Tab toggle nav · j/k move · Ctrl-U/D five · l/h column · Enter commit
+ VERSE j/k verse · [ previous chapter · ] next chapter · y copy · z scope
  WORD  (in word view) j/k select occurrence · Enter jump · Esc back
  NOTES i edit note (Esc save) · :set editor popup for IME-safe input
  FIND  / find in verse preview · j/k next/prev · Enter accept · Esc clear
@@ -1255,9 +1512,11 @@ This manual describes what each mode and command changes. Scroll with j/k, the a
 # Navigator
 Press Tab to open the four-column navigator: Books, Chapters, Verses, and Words. Moving a selection updates the preview immediately but does not change the committed reading position until you press Enter.
 $ j / k or Up / Down     move within the active column
+$ Ctrl-U / Ctrl-D        move five items up / down
 $ l / Right              drill into the next column
 $ h / Left               return to the previous column
 $ g / G                  jump to the first / last item in the active column
+$ y                      copy the previewed highlighted verse
 $ Enter                  commit the selected verse or word
 $ Esc or q               close NAV and return to the committed position
 The Words column requires the optional SBLGNT or WLC original-language data; Strong's data enriches its lexical details. Install the study pack from onboarding or Settings if the column is empty.
@@ -1267,7 +1526,7 @@ The scope controls how much text surrounds the focused verse. Press z to cycle t
 $ window   show verses before and after the focus; + and - change the radius
 $ chapter  show the complete chapter
 $ verse    show only the focused verse and its attached note area
-In reading mode, j/k moves the focused verse. g/G jumps to the first/last verse in the current study set. Ctrl-D and Ctrl-U scroll by half a screen without changing the focused verse.
+In reading mode, j/k moves the focused verse. [ opens the previous chapter and ] opens the next chapter, starting at verse 1 and crossing book boundaries. y copies the highlighted verse reference and all displayed translations to the system clipboard. g/G jumps to the first/last verse in the current study set. Ctrl-D and Ctrl-U scroll by half a screen without changing the focused verse.
 WLC Hebrew scripture body rows align to the pane's right edge; version labels and all other translations remain left-aligned.
 
 # Word study
@@ -1283,7 +1542,8 @@ $ Esc          save and leave the inline editor
 $ Ctrl-C       discard this editing session
 $ Arrow keys   move the inline editor cursor
 Notes are stored as local Markdown files. A pencil mark identifies verses that already have notes.
-For IME-heavy Chinese input, use :set editor popup. The popup editor accepts normal terminal input; press Ctrl-D to finish or Ctrl-C to cancel. A blank submission keeps the existing note.
+Optional Vim-style note keys are disabled by default and can be enabled in Settings for the inline editor. Insert, Normal, and Visual modes make system clipboard copy and paste convenient: yy copies a line; v/V selects and y copies; p/P pastes; :wq or ZZ saves; :q! or ZQ discards.
+For IME-heavy Chinese input, use :set editor popup. The popup editor accepts normal terminal input and ignores Vim-style keys; press Ctrl-D to finish or Ctrl-C to cancel. A blank submission keeps the existing note.
 
 # Find in preview
 Press / in ordinary verse view with NAV closed to search the currently rendered translations and visible notes. This is a literal, case-insensitive search rather than a regular expression. It never searches old Results, Help, Settings, Word, or NAV content.
@@ -1305,7 +1565,7 @@ A bookmark is useful before following a word occurrence or moving to another pas
 
 # Settings
 Press o in verse view, or run :set with no argument, to open Settings. Use j/k to move, Enter or Space to toggle, and Esc to return.
-Settings controls interface language, visible translations, API keys, note markers, optional study data, and restoration of defaults. Translation and display choices are persisted locally.
+Settings controls interface language, visible translations, API keys, note markers, optional study data, the disabled-by-default Vim note copy/paste keymap, and restoration of defaults. Translation and display choices are persisted locally.
 The “Download all optional study data” action installs SBLGNT, WLC, Strong's, WEB, KJV, and Vulgate. Completed datasets are kept if a download is interrupted; run the action again to retry.
 
 # Command reference
@@ -1375,8 +1635,8 @@ Esc normally returns one level: it closes NAV, Word, Results, Settings, or Help;
 """,
     "zh": """\
 exeg TUI — 快捷键
- 导航   Tab 开关导航 · j/k 移动 · l 下钻 · h 返回 · Enter 选定 · Esc 退出
- 经文   j/k 上/下一节 · z 阅读范围 · +/- 窗口 · b 返回书签 · p 设置书签
+ 导航   Tab 开关导航 · j/k 移动 · Ctrl-U/D 五项 · l/h 切换列 · Enter 选定
+ 经文   j/k 上/下一节 · [ 上一章 · ] 下一章 · y 复制 · z 阅读范围
  词汇   （词汇视图）j/k 选择出现位置 · Enter 跳转 · Esc 返回
  笔记   i 编辑笔记（Esc 保存）· :set editor popup 启用输入法友好编辑
  查找   / 查找经文预览 · j/k 下一个/上一个 · Enter 确认 · Esc 清除
@@ -1389,9 +1649,11 @@ exeg TUI — 快捷键
 # 导航器
 按 Tab 打开四列导航器：书卷、章节、经节和词汇。移动选项会立即更新右侧预览，但只有按 Enter 后才会改变正式阅读位置。
 $ j / k 或 上 / 下方向键    在当前列移动
+$ Ctrl-U / Ctrl-D          向上 / 向下一次移动五项
 $ l / 右方向键             进入下一列
 $ h / 左方向键             返回上一列
 $ g / G                    跳到当前列第一项 / 最后一项
+$ y                        复制预览中高亮的经节
 $ Enter                    打开所选经节或词汇
 $ Esc 或 q                 关闭导航，回到已选定的阅读位置
 词汇列需要可选的 SBLGNT 或 WLC 原文数据；Strong's 数据会补充词汇资料。如果该列为空，请在首次设置或设置页下载研经资料。
@@ -1401,7 +1663,7 @@ $ Esc 或 q                 关闭导航，回到已选定的阅读位置
 $ window   显示焦点前后的经节；使用 + 和 - 调整范围
 $ chapter  显示完整章节
 $ verse    只显示焦点经节及其笔记区域
-在经文模式中，j/k 移动焦点经节；g/G 跳到当前研读选段的第一节/最后一节；Ctrl-D 与 Ctrl-U 滚动半屏但不改变焦点。
+在经文模式中，j/k 移动焦点经节；[ 打开上一章，] 打开下一章，均从第 1 节开始并可跨书卷；y 把高亮经节的引用和所有显示译本复制到系统剪贴板；g/G 跳到当前研读选段的第一节/最后一节；Ctrl-D 与 Ctrl-U 滚动半屏但不改变焦点。
 WLC 希伯来文经文正文的每一行都会对齐窗格右边缘；译本标签和其他译本仍保持左对齐。
 
 # 原文词汇研究
@@ -1417,7 +1679,8 @@ $ Esc          保存并退出内嵌编辑器
 $ Ctrl-C       放弃本次编辑
 $ 方向键       移动内嵌编辑器光标
 笔记以本地 Markdown 文件保存。已有笔记的经节旁会显示铅笔标记。
-中文输入法较多时，可使用 :set editor popup。弹出编辑器使用普通终端输入；Ctrl-D 完成，Ctrl-C 取消；空白提交会保留原笔记。
+可选的 Vim 风格笔记键位默认关闭，可在设置页为内嵌编辑器启用。Insert、Normal 和 Visual 模式便于使用系统剪贴板复制粘贴：yy 复制整行；v/V 选择后按 y 复制；p/P 粘贴；:wq 或 ZZ 保存；:q! 或 ZQ 放弃。
+中文输入法较多时，可使用 :set editor popup。弹出编辑器使用普通终端输入且忽略 Vim 键位；Ctrl-D 完成，Ctrl-C 取消；空白提交会保留原笔记。
 
 # 当前预览内查找
 在普通经文视图且导航器关闭时，按 / 查找当前已渲染的译本和可见笔记。这是忽略大小写的字面查找，不是正则表达式；它绝不会搜索旧结果、帮助、设置、词汇或导航内容。
@@ -1439,7 +1702,7 @@ $ :search faith|hope
 
 # 设置
 在经文视图按 o，或输入不带参数的 :set，打开设置。使用 j/k 移动，Enter 或空格切换，Esc 返回。
-设置页管理界面语言、可见译本、API Key、笔记标记、可选研经资料和恢复默认值。译本与显示选项会保存到本地。
+设置页管理界面语言、可见译本、API Key、笔记标记、可选研经资料、默认关闭的 Vim 笔记复制粘贴键位和恢复默认值。译本与显示选项会保存到本地。
 “下载全部可选研经数据”会安装 SBLGNT、WLC、Strong's、WEB、KJV 和 Vulgate。下载中断时已经完成的数据会保留；再次执行即可重试。
 
 # 命令参考
@@ -1727,7 +1990,14 @@ def _slice_cells(text: str, max_cells: int) -> str:
 def _put(win, y, x, s, attr, maxw):
     if x >= maxw:
         return
-    s = _slice_cells(s, max(0, maxw - x - 1))
+    capacity = max(0, maxw - x)
+    try:
+        height, _width = win.getmaxyx()
+    except (AttributeError, curses.error):
+        height = -1
+    if y == height - 1:
+        capacity = max(0, capacity - 1)
+    s = _slice_cells(s, capacity)
     if not s:
         return
     try:
@@ -1764,7 +2034,8 @@ def run(controller: Controller | None = None) -> int:
             top, bottom = 1, h - 1
             body_h = bottom - top
             if controller.intro:
-                scroll = _draw_lines(screen, lines, top, body_h, 0, w, 0, color)
+                scroll = _draw_lines(screen, lines, top, body_h, 0, w, 0, color,
+                                     focus_line)
             elif controller.show_help:
                 controller.help_scroll = _draw_lines(
                     screen, lines, top, body_h, 0, w, controller.help_scroll, color)
@@ -1778,7 +2049,9 @@ def run(controller: Controller | None = None) -> int:
                 _put(screen.stdscr, top + verse_h, 0, "─" * w,
                       _attr(KIND_COLHDR, color), w)
                 ed = controller.editor_lines()
-                _draw_lines(screen, ed, top + verse_h + 1, editor_h, 0, w, 0, color, wrap=False)
+                editor_top = top + verse_h + 1
+                _draw_lines(screen, ed, editor_top, editor_h, 0, w, 0, color, wrap=False)
+                _highlight_note_selection(screen, controller, editor_top, w, color)
             elif controller.nav_visible:
                 _draw_nav(screen, controller, top, body_h, w, color)
                 nav_w = _nav_widths(w)[1]
@@ -1912,7 +2185,9 @@ def _title(c: Controller) -> str:
     if c.study_set is not None:
         ind += " · set:" + c.study_set.en_label()
     if c.editing:
-        ind += " · INSERT"
+        edit_mode = ({"visual_line": "V-LINE"}.get(c.note_mode,
+                     c.note_mode.upper()) if c.vim_keys else "INSERT")
+        ind += f" · {edit_mode}"
     return f" exeg · {crumb} · scope:{c.scope}{extra}{' ±'+str(c.window) if c.scope=='window' else ''}{ind} "
 
 
@@ -1923,6 +2198,13 @@ def _status(c: Controller) -> str:
         return (" HELP · j/k/↑/↓ scroll · q/Esc close " if c.lang == "en" else
                 " 帮助 · j/k/↑/↓ 滚动 · q/Esc 关闭 ")
     if c.editing:
+        if c.vim_keys:
+            key = {"insert": "vim_insert_status", "normal": "vim_normal_status",
+                   "visual": "vim_visual_status",
+                   "visual_line": "vim_visual_line_status"}.get(
+                       c.note_mode, "vim_normal_status")
+            msg = (c.message + " · ") if c.message else ""
+            return f" {msg}{tr(c.lang, key)} "
         return tr(c.lang, "insert_status")
     mode = "NAV" if c.nav_visible else ("WORD" if c.view == "word" else
                                         ("RESULT" if c.view == "result" else
@@ -2109,10 +2391,53 @@ def _draw_pane(screen, c, lines, focus_line, top, body_h, x, w, scroll, color):
     return _draw_lines(screen, lines, top, body_h, x, w, scroll, color, focus_line, wrap=True)
 
 
+def _note_selected_spans(c: Controller) -> dict[int, tuple[int, int]]:
+    selected = c.note_selection_range()
+    if selected is None:
+        return {}
+    (start_y, start_x), (end_y, end_x) = selected
+    spans = {}
+    for row in range(start_y, end_y + 1):
+        line_len = len(c.note_lines[row])
+        if c.note_mode == "visual_line":
+            spans[row] = (0, line_len)
+        elif row == start_y == end_y:
+            spans[row] = (start_x, min(line_len, end_x + 1))
+        elif row == start_y:
+            spans[row] = (start_x, line_len)
+        elif row == end_y:
+            spans[row] = (0, min(line_len, end_x + 1))
+        else:
+            spans[row] = (0, line_len)
+    return spans
+
+
+def _highlight_note_selection(screen, c: Controller, editor_top: int,
+                              width: int, color: bool) -> None:
+    try:
+        height, _screen_width = screen.stdscr.getmaxyx()
+    except (AttributeError, curses.error):
+        height = -1
+    for line_idx, (start, end) in _note_selected_spans(c).items():
+        row = editor_top + 2 + line_idx
+        if height >= 0 and row >= height - 1:
+            continue
+        line = c.note_lines[line_idx]
+        col = _cell_width(line[:start])
+        cells = max(1, _cell_width(line[start:end]))
+        if col >= width:
+            continue
+        try:
+            screen.stdscr.chgat(row, col, min(cells, width - col),
+                                curses.A_REVERSE | _attr(KIND_NOTE, color))
+        except (AttributeError, curses.error):
+            pass
+
+
 def _position_editor_cursor(screen, c: Controller, top, verse_h, w):
     # editor pane starts after the divider; content begins 2 lines in (header + blank)
     row = top + verse_h + 1 + 2 + c.note_cy
-    col = c.note_cx
+    col = _cell_width(c.note_lines[c.note_cy][:c.note_cx])
     h, ww = screen.stdscr.getmaxyx()
     if 0 <= row < h - 1:
         try:
@@ -2122,6 +2447,112 @@ def _position_editor_cursor(screen, c: Controller, top, verse_h, w):
             pass
 
 
+def _vim_clamp_cursor(c: Controller) -> None:
+    c.note_cy = max(0, min(len(c.note_lines) - 1, c.note_cy))
+    line = c.note_lines[c.note_cy]
+    c.note_cx = max(0, min(max(0, len(line) - 1), c.note_cx))
+
+
+def _vim_move(c: Controller, dy: int = 0, dx: int = 0) -> None:
+    c.note_cy = max(0, min(len(c.note_lines) - 1, c.note_cy + dy))
+    line = c.note_lines[c.note_cy]
+    c.note_cx = max(0, min(max(0, len(line) - 1), c.note_cx + dx))
+
+
+def _handle_vim_note_key(screen, c: Controller, ch) -> None:
+    escape = ch in (27, "\x1b")
+    if c.note_mode == "insert":
+        if escape:
+            c.note_mode = "normal"
+            c.note_anchor = None
+            c.note_pending = ""
+            _vim_clamp_cursor(c)
+        elif ch in (3, "\x03"):
+            c.end_edit(save=False)
+        elif ch in (curses.KEY_ENTER, 10, 13, "\r", "\n"):
+            c.insert_newline()
+        elif ch in (curses.KEY_BACKSPACE, 8, 127, 263, "\x7f", "\b", "\x08"):
+            c.backspace()
+        elif ch == curses.KEY_LEFT:
+            c.cursor_move(0, -1)
+        elif ch == curses.KEY_RIGHT:
+            c.cursor_move(0, 1)
+        elif ch == curses.KEY_UP:
+            c.cursor_move(-1, 0)
+        elif ch == curses.KEY_DOWN:
+            c.cursor_move(1, 0)
+        elif isinstance(ch, str) and (ch.isprintable() or ch == "\t"):
+            c.insert_char(ch)
+        return
+
+    if escape:
+        c.note_mode = "normal"
+        c.note_anchor = None
+        c.note_pending = ""
+        return
+
+    if c.note_pending:
+        pending = c.note_pending
+        c.note_pending = ""
+        if pending == "g" and ch == "g":
+            c.note_cy = 0
+            _vim_clamp_cursor(c)
+            return
+        if pending == "Z" and ch in ("Z", "Q"):
+            c.end_edit(save=(ch == "Z"))
+            return
+        if pending == "y" and ch == "y":
+            c.yank_note_selection(linewise=True)
+            return
+
+    if ch in ("h", curses.KEY_LEFT):
+        _vim_move(c, dx=-1)
+    elif ch in ("l", curses.KEY_RIGHT):
+        _vim_move(c, dx=1)
+    elif ch in ("j", curses.KEY_DOWN):
+        _vim_move(c, dy=1)
+    elif ch in ("k", curses.KEY_UP):
+        _vim_move(c, dy=-1)
+    elif ch == "0":
+        c.note_cx = 0
+    elif ch == "$":
+        c.note_cx = max(0, len(c.note_lines[c.note_cy]) - 1)
+    elif ch == "G":
+        c.note_cy = len(c.note_lines) - 1
+        _vim_clamp_cursor(c)
+    elif ch == "g":
+        c.note_pending = "g"
+    elif ch == "Z":
+        c.note_pending = "Z"
+    elif ch == "y" and c.note_mode == "normal":
+        c.note_pending = "y"
+    elif ch == "y" and c.note_mode in ("visual", "visual_line"):
+        c.yank_note_selection()
+    elif ch == "v" and c.note_mode == "normal":
+        c.note_mode = "visual"
+        c.note_anchor = (c.note_cy, c.note_cx)
+    elif ch == "V" and c.note_mode == "normal":
+        c.note_mode = "visual_line"
+        c.note_anchor = (c.note_cy, c.note_cx)
+    elif ch in ("p", "P") and c.note_mode == "normal":
+        c.paste_note_clipboard(before=(ch == "P"))
+    elif ch == "p" and c.note_mode in ("visual", "visual_line"):
+        c.paste_note_clipboard(replace_selection=True)
+    elif ch == "i" and c.note_mode == "normal":
+        c.note_mode = "insert"
+    elif ch == "a" and c.note_mode == "normal":
+        c.note_cx = min(len(c.note_lines[c.note_cy]), c.note_cx + 1)
+        c.note_mode = "insert"
+    elif ch == ":" and c.note_mode == "normal":
+        command = _prompt_line(screen, ":", [])
+        if command == "wq":
+            c.end_edit(save=True)
+        elif command == "q!":
+            c.end_edit(save=False)
+        elif command is not None:
+            c.message = f"unknown note command: {command}"
+
+
 def _edit_loop(screen, c: Controller):
     try:
         ch = screen.stdscr.get_wch()
@@ -2129,6 +2560,9 @@ def _edit_loop(screen, c: Controller):
         ch = 3  # Ctrl-C
     except Exception:
         ch = screen.stdscr.getch()
+    if c.vim_keys:
+        _handle_vim_note_key(screen, c, ch)
+        return
     if isinstance(ch, str):
         if ch == "\x1b":
             c.end_edit(save=True)
@@ -2355,6 +2789,12 @@ def _handle(screen, c: Controller, key, scroll, lines, focus_line, body_h) -> in
             c.move_sel(1)
         elif k in (ord("k"), curses.KEY_UP):
             c.move_sel(-1)
+        elif k == 4:  # Ctrl-D
+            c.move_sel(5)
+        elif k == 21:  # Ctrl-U
+            c.move_sel(-5)
+        elif k == ord("y"):
+            c.copy_highlighted_verse()
         elif k == ord("g"):
             c._set_col_value(c.nav_col, 1)
             c.sel = Node(c.book_idx, c.chapter, c.verse)
@@ -2408,6 +2848,12 @@ def _handle(screen, c: Controller, key, scroll, lines, focus_line, body_h) -> in
     if k in (ord("k"), curses.KEY_UP):
         c.move_focus(-1)
         return 0
+    if k == ord("["):
+        c.move_chapter(-1)
+        return 0
+    if k == ord("]"):
+        c.move_chapter(1)
+        return 0
     if k == ord("z"):
         c.cycle_scope()
         return 0
@@ -2419,6 +2865,9 @@ def _handle(screen, c: Controller, key, scroll, lines, focus_line, body_h) -> in
         return 0
     if k == ord("i"):
         c.begin_edit()
+        return 0
+    if k == ord("y"):
+        c.copy_highlighted_verse()
         return 0
     if k == ord("o"):
         c.open_settings()

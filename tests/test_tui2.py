@@ -6,17 +6,192 @@ import pytest
 from exeg import canon, corpus, notes, refs, tui
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def tmp_notes(tmp_path, monkeypatch):
-    """Redirect notes storage to a temp dir; keep the real corpus."""
+    """Redirect every TUI test's notes and metadata to a temporary directory."""
     monkeypatch.setattr(notes, "notes_root", lambda: tmp_path / "notes")
     return tmp_path / "notes"
 
 
 def make_controller():
-    c = tui.Controller()
+    c = tui.Controller(intro=True)
+    c._set_focus_state(tui.Node(tui._osis_index("1Pet"), 3, 18))
+    c.intro = False
     c.lang = "en"
     return c
+
+
+def test_unconfigured_controller_starts_at_matthew_1_1(tmp_notes):
+    c = tui.Controller(intro=True)
+    assert (c.focus.book().osis, c.focus.chapter, c.focus.verse) == ("Matt", 1, 1)
+
+
+def test_configured_controller_restores_last_committed_verse(tmp_notes):
+    notes.write_meta({"setup_done": True,
+                      "last_read": {"book": "Isa", "chapter": 5, "verse": 7}})
+    c = tui.Controller()
+    assert (c.focus.book().osis, c.focus.chapter, c.focus.verse) == ("Isa", 5, 7)
+
+
+def test_invalid_last_read_falls_back_to_matthew_1_1(tmp_notes):
+    notes.write_meta({"setup_done": True,
+                      "last_read": {"book": "NoBook", "chapter": 999, "verse": 0}})
+    c = tui.Controller()
+    assert (c.focus.book().osis, c.focus.chapter, c.focus.verse) == ("Matt", 1, 1)
+
+
+def test_goto_persists_focus_without_overwriting_preferences(tmp_notes):
+    notes.write_meta({"setup_done": True, "lang": "zh", "translations": ["cuvs"]})
+    c = tui.Controller()
+    c.goto(tui.Node(tui._osis_index("Isa"), 5, 7))
+    meta = notes.read_meta()
+    assert meta["last_read"] == {"book": "Isa", "chapter": 5, "verse": 7}
+    assert meta["setup_done"] is True
+    assert meta["lang"] == "zh" and meta["translations"] == ["cuvs"]
+
+
+def test_preference_persistence_preserves_setup_and_last_read(tmp_notes):
+    notes.write_meta({"setup_done": True,
+                      "last_read": {"book": "Matt", "chapter": 2, "verse": 3}})
+    c = tui.Controller()
+    c.execute(":set window 8")
+    meta = notes.read_meta()
+    assert meta["setup_done"] is True
+    assert meta["last_read"] == {"book": "Matt", "chapter": 2, "verse": 3}
+
+
+def test_move_chapter_crosses_book_boundaries_and_opens_verse_one(tmp_notes):
+    c = tui.Controller(intro=True)
+    c.goto(tui.Node(tui._osis_index("Matt"), 2, 10))
+    c.move_chapter(-1)
+    assert (c.focus.book().osis, c.focus.chapter, c.focus.verse) == ("Matt", 1, 1)
+    c.move_chapter(-1)
+    assert (c.focus.book().osis, c.focus.chapter, c.focus.verse) == ("Mal", 4, 1)
+    c.move_chapter(1)
+    assert (c.focus.book().osis, c.focus.chapter, c.focus.verse) == ("Matt", 1, 1)
+
+
+def test_move_chapter_clamps_at_canonical_endpoints(tmp_notes):
+    c = tui.Controller(intro=True)
+    c.goto(tui.Node(tui._osis_index("Gen"), 1, 1))
+    c.move_chapter(-1)
+    assert (c.focus.book().osis, c.focus.chapter) == ("Gen", 1)
+    c.goto(tui.Node(tui._osis_index("Rev"), 22, 1))
+    c.move_chapter(1)
+    assert (c.focus.book().osis, c.focus.chapter) == ("Rev", 22)
+
+
+def test_move_chapter_clears_temporary_study_set(tmp_notes):
+    c = tui.Controller(intro=True)
+    c.study_set = refs.parse_ref("Matt 1:1-3")
+    c.move_chapter(1)
+    assert c.study_set is None
+    assert (c.focus.book().osis, c.focus.chapter, c.focus.verse) == ("Matt", 2, 1)
+
+
+def test_brackets_route_to_previous_and_next_chapter(tmp_notes):
+    c = tui.Controller(intro=True)
+    c.intro = False
+    c.nav_visible = False
+    tui._handle(None, c, ord("]"), 0, [], -1, 20)
+    assert (c.focus.book().osis, c.focus.chapter, c.focus.verse) == ("Matt", 2, 1)
+    tui._handle(None, c, ord("["), 0, [], -1, 20)
+    assert (c.focus.book().osis, c.focus.chapter, c.focus.verse) == ("Matt", 1, 1)
+
+
+def test_nav_ctrl_u_ctrl_d_move_five_items(tmp_notes):
+    c = tui.Controller(intro=True)
+    c.intro = False
+    c.nav_col = 0
+    assert c.column_value(0) == tui._osis_index("Matt") + 1
+    tui._handle(None, c, 4, 0, [], -1, 20)
+    assert c.column_value(0) == tui._osis_index("Matt") + 6
+    tui._handle(None, c, 21, 0, [], -1, 20)
+    assert c.column_value(0) == tui._osis_index("Matt") + 1
+
+
+def test_highlighted_verse_text_contains_reference_and_visible_versions(tmp_notes):
+    c = tui.Controller(intro=True)
+    c.nav_visible = False
+    c.translations = ["cuvs", "asv"]
+    text = c.highlighted_verse_text()
+    assert text.startswith("Matthew 1:1 · 太 1:1")
+    assert "和合本" in text and "ASV" in text
+
+
+def test_nav_copy_formats_preview_selection(tmp_notes):
+    c = tui.Controller(intro=True)
+    c._set_col_value(0, tui._osis_index("Isa") + 1)
+    c.chapter, c.verse = 5, 7
+    c.sel = tui.Node(tui._osis_index("Isa"), 5, 7)
+    assert c.highlighted_verse_text().startswith("Isaiah 5:7")
+    assert c.focus.book().osis == "Matt"
+
+
+@pytest.mark.parametrize("system, available, expected", [
+    ("Darwin", {"pbcopy"}, ["pbcopy"]),
+    ("Windows", {"clip"}, ["clip"]),
+    ("Linux", {"wl-copy"}, ["wl-copy"]),
+    ("Linux", {"xclip"}, ["xclip", "-selection", "clipboard"]),
+    ("Linux", {"xsel"}, ["xsel", "--clipboard", "--input"]),
+])
+def test_clipboard_command_mapping(system, available, expected):
+    which = lambda name: f"/bin/{name}" if name in available else None
+    assert tui._clipboard_command(system, which) == expected
+
+
+@pytest.mark.parametrize("system, available, expected", [
+    ("Darwin", {"pbpaste"}, ["pbpaste"]),
+    ("Windows", {"powershell"}, ["powershell", "-NoProfile", "-Command",
+                                  "Get-Clipboard -Raw"]),
+    ("Linux", {"wl-paste"}, ["wl-paste", "--no-newline"]),
+    ("Linux", {"xclip"}, ["xclip", "-selection", "clipboard", "-o"]),
+    ("Linux", {"xsel"}, ["xsel", "--clipboard", "--output"]),
+])
+def test_clipboard_read_command_mapping(system, available, expected):
+    which = lambda name: f"/bin/{name}" if name in available else None
+    assert tui._clipboard_read_command(system, which) == expected
+
+
+def test_clipboard_adapters_use_utf8_without_a_shell():
+    calls = []
+
+    class Result:
+        returncode = 0
+        stderr = ""
+        stdout = "粘贴"
+
+    def runner(command, **kwargs):
+        calls.append((command, kwargs))
+        return Result()
+
+    assert tui._copy_clipboard("复制", "Darwin", lambda _name: "/bin/tool", runner) == (True, "")
+    assert tui._read_clipboard("Darwin", lambda _name: "/bin/tool", runner) == ("粘贴", "")
+    assert all(kwargs.get("encoding") == "utf-8" for _command, kwargs in calls)
+    assert all("shell" not in kwargs for _command, kwargs in calls)
+
+
+def test_y_copies_highlighted_verse_without_shell(tmp_notes, monkeypatch):
+    c = tui.Controller(intro=True)
+    c.intro = False
+    c.nav_visible = False
+    copied = []
+    monkeypatch.setattr(tui, "_copy_clipboard",
+                        lambda text: (copied.append(text) or True, ""))
+    tui._handle(None, c, ord("y"), 0, [], -1, 20)
+    assert copied and copied[0].startswith("Matthew 1:1")
+    assert "copied" in c.message.lower()
+
+
+def test_clipboard_failure_is_nonfatal_status(tmp_notes, monkeypatch):
+    c = tui.Controller(intro=True)
+    c.intro = False
+    c.nav_visible = False
+    monkeypatch.setattr(tui, "_copy_clipboard",
+                        lambda text: (False, "no clipboard command found"))
+    tui._handle(None, c, ord("y"), 0, [], -1, 20)
+    assert c.running is True
+    assert "failed" in c.message.lower()
 
 
 def test_screen_open_uses_short_escape_delay(monkeypatch):
@@ -306,6 +481,200 @@ def test_begin_edit_loads_existing_note(tmp_notes):
     assert "second line" in c.note_lines
 
 
+def vim_editor_controller():
+    c = make_controller()
+    c.commit()
+    c.vim_keys = True
+    c.begin_edit()
+    return c
+
+
+def test_vim_escape_enters_normal_and_i_a_return_to_insert(tmp_notes):
+    c = vim_editor_controller()
+    c.insert_char("abc")
+    tui._handle_vim_note_key(None, c, "\x1b")
+    assert c.editing is True and c.note_mode == "normal"
+    assert c.note_cx == 2
+    tui._handle_vim_note_key(None, c, "i")
+    assert c.note_mode == "insert"
+    tui._handle_vim_note_key(None, c, "\x1b")
+    tui._handle_vim_note_key(None, c, "a")
+    assert c.note_mode == "insert" and c.note_cx == 3
+
+
+def test_vim_normal_movement_supports_hjkl_zero_dollar_gg_G(tmp_notes):
+    c = vim_editor_controller()
+    c.note_lines = ["abc", "def", "ghi"]
+    c.note_cy, c.note_cx, c.note_mode = 1, 2, "normal"
+    for key in ("h", "0", "$", "j", "k"):
+        tui._handle_vim_note_key(None, c, key)
+    assert (c.note_cy, c.note_cx) == (1, 2)
+    tui._handle_vim_note_key(None, c, "g")
+    tui._handle_vim_note_key(None, c, "g")
+    assert c.note_cy == 0
+    tui._handle_vim_note_key(None, c, "G")
+    assert c.note_cy == 2
+
+
+def test_vim_ZZ_saves_and_ZQ_discards(tmp_notes):
+    c = vim_editor_controller()
+    c.note_lines = ["save me"]
+    c.note_mode = "normal"
+    tui._handle_vim_note_key(None, c, "Z")
+    tui._handle_vim_note_key(None, c, "Z")
+    assert c.editing is False
+    assert "save me" in notes.read_verse("1Pet", 3, 18)
+
+    c = vim_editor_controller()
+    c.note_lines = ["discard me"]
+    c.note_mode = "normal"
+    tui._handle_vim_note_key(None, c, "Z")
+    tui._handle_vim_note_key(None, c, "Q")
+    assert c.editing is False
+    assert "discard me" not in notes.read_verse("1Pet", 3, 18)
+
+
+@pytest.mark.parametrize("command, saved", [("wq", True), ("q!", False)])
+def test_vim_colon_commands_exit_note(tmp_notes, monkeypatch, command, saved):
+    c = vim_editor_controller()
+    c.note_lines = ["colon note"]
+    c.note_mode = "normal"
+    monkeypatch.setattr(tui, "_prompt_line",
+                        lambda _screen, _prefix, _history: command)
+    tui._handle_vim_note_key(None, c, ":")
+    assert c.editing is False
+    assert ("colon note" in notes.read_verse("1Pet", 3, 18)) is saved
+
+
+def test_vim_yy_copies_current_line(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["first", "second"]
+    c.note_cy, c.note_cx, c.note_mode = 1, 2, "normal"
+    copied = []
+    monkeypatch.setattr(tui, "_copy_clipboard",
+                        lambda text: (copied.append(text) or True, ""))
+    tui._handle_vim_note_key(None, c, "y")
+    tui._handle_vim_note_key(None, c, "y")
+    assert copied == ["second\n"]
+
+
+def test_vim_character_visual_yank_is_inclusive(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["alpha", "beta"]
+    c.note_cy, c.note_cx, c.note_mode = 0, 2, "normal"
+    copied = []
+    monkeypatch.setattr(tui, "_copy_clipboard",
+                        lambda text: (copied.append(text) or True, ""))
+    tui._handle_vim_note_key(None, c, "v")
+    tui._handle_vim_note_key(None, c, "l")
+    tui._handle_vim_note_key(None, c, "l")
+    tui._handle_vim_note_key(None, c, "y")
+    assert copied == ["pha"]
+    assert c.note_mode == "normal"
+
+
+def test_vim_multiline_character_visual_yank(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["alpha", "beta"]
+    c.note_cy, c.note_cx, c.note_mode = 0, 3, "normal"
+    copied = []
+    monkeypatch.setattr(tui, "_copy_clipboard",
+                        lambda text: (copied.append(text) or True, ""))
+    tui._handle_vim_note_key(None, c, "v")
+    tui._handle_vim_note_key(None, c, "j")
+    tui._handle_vim_note_key(None, c, "0")
+    tui._handle_vim_note_key(None, c, "l")
+    tui._handle_vim_note_key(None, c, "y")
+    assert copied == ["ha\nbe"]
+
+
+def test_vim_line_visual_yank_includes_complete_lines(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["alpha", "beta", "gamma"]
+    c.note_cy, c.note_mode = 0, "normal"
+    copied = []
+    monkeypatch.setattr(tui, "_copy_clipboard",
+                        lambda text: (copied.append(text) or True, ""))
+    tui._handle_vim_note_key(None, c, "V")
+    tui._handle_vim_note_key(None, c, "j")
+    tui._handle_vim_note_key(None, c, "y")
+    assert copied == ["alpha\nbeta\n"]
+
+
+def test_vim_visual_selected_spans_are_visible_ranges(tmp_notes):
+    c = vim_editor_controller()
+    c.note_lines = ["alpha", "beta"]
+    c.note_anchor = (0, 2)
+    c.note_cy, c.note_cx, c.note_mode = 1, 1, "visual"
+    assert tui._note_selected_spans(c) == {0: (2, 5), 1: (0, 2)}
+    c.note_mode = "visual_line"
+    assert tui._note_selected_spans(c) == {0: (0, 5), 1: (0, 4)}
+
+
+def test_visual_highlight_never_overwrites_status_row(tmp_notes):
+    c = vim_editor_controller()
+    c.note_lines = ["alpha", "beta"]
+    c.note_anchor = (0, 0)
+    c.note_cy, c.note_mode = 1, "visual_line"
+
+    class FakeWindow:
+        def __init__(self):
+            self.rows = []
+        def getmaxyx(self):
+            return (20, 80)
+        def chgat(self, row, col, length, attr):
+            self.rows.append(row)
+
+    screen = type("FakeScreen", (), {})()
+    screen.stdscr = FakeWindow()
+    tui._highlight_note_selection(screen, c, editor_top=16, width=80, color=False)
+    assert screen.stdscr.rows == [18]
+
+
+def test_vim_title_reports_actual_note_mode(tmp_notes):
+    c = vim_editor_controller()
+    c.note_mode = "normal"
+    assert "NORMAL" in tui._title(c) and "INSERT" not in tui._title(c)
+
+
+def test_vim_p_and_P_paste_multiline_clipboard(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["abcd"]
+    c.note_cy, c.note_cx, c.note_mode = 0, 1, "normal"
+    monkeypatch.setattr(tui, "_read_clipboard", lambda: ("X\nY", ""))
+    tui._handle_vim_note_key(None, c, "p")
+    assert c.note_lines == ["abX", "Ycd"]
+
+    c.note_lines = ["abcd"]
+    c.note_cy, c.note_cx, c.note_mode = 0, 1, "normal"
+    tui._handle_vim_note_key(None, c, "P")
+    assert c.note_lines == ["aX", "Ybcd"]
+
+
+def test_vim_visual_p_replaces_selection(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["abcdef"]
+    c.note_cy, c.note_cx, c.note_mode = 0, 1, "normal"
+    monkeypatch.setattr(tui, "_read_clipboard", lambda: ("XY", ""))
+    tui._handle_vim_note_key(None, c, "v")
+    tui._handle_vim_note_key(None, c, "l")
+    tui._handle_vim_note_key(None, c, "l")
+    tui._handle_vim_note_key(None, c, "p")
+    assert c.note_lines == ["aXYef"]
+    assert c.note_mode == "normal"
+
+
+def test_vim_paste_failure_keeps_note_unchanged(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["unchanged"]
+    c.note_mode = "normal"
+    monkeypatch.setattr(tui, "_read_clipboard",
+                        lambda: (None, "clipboard unavailable"))
+    tui._handle_vim_note_key(None, c, "p")
+    assert c.note_lines == ["unchanged"]
+    assert "unavailable" in c.message
+
+
 def test_editor_insert_newline_backspace_cursor(tmp_notes):
     c = make_controller()
     c.commit()
@@ -366,6 +735,17 @@ def test_bookmark_back_roundtrip():
     assert c.focus.verse == 22
     c.back()                         # return to bookmark
     assert c.focus.verse == 18
+
+
+def test_back_persists_returned_bookmark_as_last_read(tmp_notes):
+    c = make_controller()
+    c.commit()
+    c.set_bookmark()
+    c.move_focus(2)
+    c.back()
+    assert notes.read_meta()["last_read"] == {
+        "book": "1Pet", "chapter": 3, "verse": 18,
+    }
 
 
 def test_bookmark_persists_through_commit():
@@ -736,6 +1116,39 @@ def test_controller_lang_from_meta(tmp_notes):
     assert c.translations == ["cuvs"]
 
 
+def test_settings_focus_line_tracks_selected_item(tmp_notes):
+    c = tui.Controller(intro=True)
+    c.open_settings()
+    c.settings_cursor = c._selectable_settings_indexes()[-1]
+    lines, focus_line = c.render_settings()
+    assert "Restore all settings" in lines[focus_line][0]
+
+
+def test_intro_focus_line_tracks_begin_action(tmp_notes):
+    c = tui.Controller(intro=True)
+    c.intro_cursor = c._selectable_intro_indexes()[-1]
+    lines, focus_line = c.render_intro()
+    assert "Begin" in lines[focus_line][0]
+
+
+def test_small_settings_pane_scrolls_selected_row_into_view(tmp_notes):
+    c = tui.Controller(intro=True)
+    c.open_settings()
+    c.settings_cursor = c._selectable_settings_indexes()[-1]
+    lines, focus_line = c.render_settings()
+
+    class FakeWindow:
+        def __init__(self):
+            self.writes = []
+        def addstr(self, y, x, text, attr):
+            self.writes.append((y, text))
+
+    screen = type("FakeScreen", (), {})()
+    screen.stdscr = FakeWindow()
+    scroll = tui._draw_lines(screen, lines, 1, 5, 0, 80, 0, False, focus_line)
+    assert scroll > 0
+
+
 def test_open_settings_and_toggle_lang(tmp_notes):
     c = make_controller()
     c.open_settings()
@@ -749,6 +1162,30 @@ def test_open_settings_and_toggle_lang(tmp_notes):
     assert c.lang == "zh"
     # persisted
     assert notes.read_meta().get("lang") == "zh"
+
+
+def test_vim_note_keys_default_off_and_load_from_meta(tmp_notes):
+    assert tui.Controller(intro=True).vim_keys is False
+    notes.write_meta({"vim_keys": True})
+    assert tui.Controller().vim_keys is True
+
+
+def test_settings_explains_and_toggles_vim_note_keys(tmp_notes):
+    c = tui.Controller(intro=True)
+    c.open_settings()
+    items = c.settings_items()
+    index = next(i for i, item in enumerate(items) if item.get("key") == "vim_keys")
+    assert "copy" in items[index + 1]["label"].lower()
+    assert "paste" in items[index + 1]["label"].lower()
+    c.settings_cursor = index
+    c.toggle_settings()
+    assert c.vim_keys is True
+    assert notes.read_meta()["vim_keys"] is True
+
+    c.lang = "zh"
+    items = c.settings_items()
+    index = next(i for i, item in enumerate(items) if item.get("key") == "vim_keys")
+    assert "复制" in items[index + 1]["label"] and "粘贴" in items[index + 1]["label"]
 
 
 def test_settings_toggle_version(tmp_notes):
@@ -1111,17 +1548,54 @@ def test_wrap_one_uses_version_body_as_hanging_indent():
     assert chunks[1].startswith(" " * 10 + "⸀ζηλωταὶ")
 
 
+def test_put_does_not_drop_final_wide_character_from_wrapped_body():
+    body = ("万军之耶和华的葡萄园就是 以色列家； 他所喜爱的树就是 犹大人。 "
+            "他指望的是公平， 谁知倒有暴虐； 指望的是公义， 谁知倒有冤声。")
+    logical = tui._version_line("和合本", body)
+    rows, _ = tui._build_rows([(logical, tui.KIND_NORMAL)], 131, True, True)
+    assert rows[0][0].endswith("声") and rows[1][0].endswith("。")
+
+    class FakeWindow:
+        def __init__(self):
+            self.writes = []
+        def getmaxyx(self):
+            return (20, 131)
+        def addstr(self, y, x, text, attr):
+            self.writes.append(text)
+
+    win = FakeWindow()
+    for y, (text, _kind) in enumerate(rows):
+        tui._put(win, y, 0, text, 0, 131)
+    assert win.writes[0].endswith("声")
+    assert "冤声。" in "".join(part.strip() for part in win.writes)
+
+
 def test_put_clips_to_available_terminal_cells():
     class FakeWindow:
         def __init__(self):
             self.writes = []
-
+        def getmaxyx(self):
+            return (20, 20)
         def addstr(self, y, x, text, attr):
             self.writes.append((y, x, text, attr))
 
     win = FakeWindow()
     tui._put(win, 0, 10, "中文中文中文中文中文", 0, 20)
-    assert _terminal_cells(win.writes[0][2]) <= 9
+    assert _terminal_cells(win.writes[0][2]) <= 10
+
+
+def test_put_reserves_only_the_terminal_lower_right_cell():
+    class FakeWindow:
+        def __init__(self):
+            self.writes = []
+        def getmaxyx(self):
+            return (20, 20)
+        def addstr(self, y, x, text, attr):
+            self.writes.append((y, x, text, attr))
+
+    win = FakeWindow()
+    tui._put(win, 19, 10, "abcdefghij", 0, 20)
+    assert win.writes[0][2] == "abcdefghi"
 
 
 def test_title_uses_pencil_for_focus_marker():
