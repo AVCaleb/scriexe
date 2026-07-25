@@ -102,6 +102,72 @@ def test_nav_ctrl_u_ctrl_d_move_five_items(tmp_notes):
     assert c.column_value(0) == tui._osis_index("Matt") + 1
 
 
+def test_highlighted_verse_text_contains_reference_and_visible_versions(tmp_notes):
+    c = tui.Controller(intro=True)
+    c.nav_visible = False
+    c.translations = ["cuvs", "asv"]
+    text = c.highlighted_verse_text()
+    assert text.startswith("Matthew 1:1 · 太 1:1")
+    assert "和合本" in text and "ASV" in text
+
+
+def test_nav_copy_formats_preview_selection(tmp_notes):
+    c = tui.Controller(intro=True)
+    c._set_col_value(0, tui._osis_index("Isa") + 1)
+    c.chapter, c.verse = 5, 7
+    c.sel = tui.Node(tui._osis_index("Isa"), 5, 7)
+    assert c.highlighted_verse_text().startswith("Isaiah 5:7")
+    assert c.focus.book().osis == "Matt"
+
+
+@pytest.mark.parametrize("system, available, expected", [
+    ("Darwin", {"pbcopy"}, ["pbcopy"]),
+    ("Windows", {"clip"}, ["clip"]),
+    ("Linux", {"wl-copy"}, ["wl-copy"]),
+    ("Linux", {"xclip"}, ["xclip", "-selection", "clipboard"]),
+    ("Linux", {"xsel"}, ["xsel", "--clipboard", "--input"]),
+])
+def test_clipboard_command_mapping(system, available, expected):
+    which = lambda name: f"/bin/{name}" if name in available else None
+    assert tui._clipboard_command(system, which) == expected
+
+
+@pytest.mark.parametrize("system, available, expected", [
+    ("Darwin", {"pbpaste"}, ["pbpaste"]),
+    ("Windows", {"powershell"}, ["powershell", "-NoProfile", "-Command",
+                                  "Get-Clipboard -Raw"]),
+    ("Linux", {"wl-paste"}, ["wl-paste", "--no-newline"]),
+    ("Linux", {"xclip"}, ["xclip", "-selection", "clipboard", "-o"]),
+    ("Linux", {"xsel"}, ["xsel", "--clipboard", "--output"]),
+])
+def test_clipboard_read_command_mapping(system, available, expected):
+    which = lambda name: f"/bin/{name}" if name in available else None
+    assert tui._clipboard_read_command(system, which) == expected
+
+
+def test_y_copies_highlighted_verse_without_shell(tmp_notes, monkeypatch):
+    c = tui.Controller(intro=True)
+    c.intro = False
+    c.nav_visible = False
+    copied = []
+    monkeypatch.setattr(tui, "_copy_clipboard",
+                        lambda text: (copied.append(text) or True, ""))
+    tui._handle(None, c, ord("y"), 0, [], -1, 20)
+    assert copied and copied[0].startswith("Matthew 1:1")
+    assert "copied" in c.message.lower()
+
+
+def test_clipboard_failure_is_nonfatal_status(tmp_notes, monkeypatch):
+    c = tui.Controller(intro=True)
+    c.intro = False
+    c.nav_visible = False
+    monkeypatch.setattr(tui, "_copy_clipboard",
+                        lambda text: (False, "no clipboard command found"))
+    tui._handle(None, c, ord("y"), 0, [], -1, 20)
+    assert c.running is True
+    assert "failed" in c.message.lower()
+
+
 def test_screen_open_uses_short_escape_delay(monkeypatch):
     calls = []
     monkeypatch.setattr(tui, "_direct_term_name", lambda *_args, **_kwargs: None)

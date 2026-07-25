@@ -11,7 +11,9 @@ is the curses driver.
 """
 import curses
 import os
+import platform
 import re
+import shutil
 import subprocess
 import sys
 import unicodedata
@@ -199,6 +201,61 @@ def _key_set(env_var: str) -> bool:
     return setup.key_is_set(env_var)
 
 
+def _clipboard_command(system=None, which=shutil.which) -> list[str] | None:
+    system = system or platform.system()
+    candidates = {
+        "Darwin": [(["pbcopy"], "pbcopy")],
+        "Windows": [(["clip"], "clip")],
+    }.get(system, [(["wl-copy"], "wl-copy"),
+                   (["xclip", "-selection", "clipboard"], "xclip"),
+                   (["xsel", "--clipboard", "--input"], "xsel")])
+    return next((command for command, executable in candidates if which(executable)), None)
+
+
+def _clipboard_read_command(system=None, which=shutil.which) -> list[str] | None:
+    system = system or platform.system()
+    candidates = {
+        "Darwin": [(["pbpaste"], "pbpaste")],
+        "Windows": [(["powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw"],
+                     "powershell")],
+    }.get(system, [(["wl-paste", "--no-newline"], "wl-paste"),
+                   (["xclip", "-selection", "clipboard", "-o"], "xclip"),
+                   (["xsel", "--clipboard", "--output"], "xsel")])
+    return next((command for command, executable in candidates if which(executable)), None)
+
+
+def _copy_clipboard(text: str, system=None, which=shutil.which,
+                    runner=subprocess.run) -> tuple[bool, str]:
+    command = _clipboard_command(system, which)
+    if command is None:
+        return False, "no clipboard command found"
+    try:
+        result = runner(command, input=text, text=True,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                        check=False)
+    except OSError as e:
+        return False, str(e)
+    if result.returncode != 0:
+        error = (result.stderr or "").strip()
+        return False, error or f"clipboard command exited {result.returncode}"
+    return True, ""
+
+
+def _read_clipboard(system=None, which=shutil.which,
+                    runner=subprocess.run) -> tuple[str | None, str]:
+    command = _clipboard_read_command(system, which)
+    if command is None:
+        return None, "no clipboard command found"
+    try:
+        result = runner(command, capture_output=True, text=True, check=False)
+    except OSError as e:
+        return None, str(e)
+    if result.returncode != 0:
+        error = (result.stderr or "").strip()
+        return None, error or f"clipboard command exited {result.returncode}"
+    return result.stdout, ""
+
+
 # --------------------------------------------------------------------------- #
 # Controller (pure logic, no curses)
 # --------------------------------------------------------------------------- #
@@ -333,6 +390,28 @@ class Controller:
             return refs.Ref(b, n.chapter, lo, n.chapter, end)
         hi = _max_verse(b, n.chapter) or 1
         return refs.Ref(b, n.chapter, 1, n.chapter, hi)
+
+    def highlighted_verse_text(self) -> str:
+        n = self.shown()
+        book = n.book()
+        ref = refs.Ref(book, n.chapter, n.verse, n.chapter, n.verse)
+        versions = self.effective_versions()
+        texts, _notices = _gather(ref, versions)
+        lines = [f"{book.en} {n.chapter}:{n.verse} · "
+                 f"{book.zh_abbr} {n.chapter}:{n.verse}"]
+        for version in versions:
+            text = texts.get(version, {}).get((n.chapter, n.verse))
+            if text:
+                label = display.LABELS.get(version, version.upper())
+                lines.append(f"{label}  {text}")
+        return "\n".join(lines) + "\n"
+
+    def copy_highlighted_verse(self):
+        n = self.shown()
+        ok, error = _copy_clipboard(self.highlighted_verse_text())
+        ref = f"{n.book().en} {n.chapter}:{n.verse}"
+        self.message = (tr(self.lang, "copied_verse", ref=ref) if ok else
+                        tr(self.lang, "copy_failed", e=error))
 
     # ---- focus changes ----------------------------------------------------
 
@@ -2433,6 +2512,8 @@ def _handle(screen, c: Controller, key, scroll, lines, focus_line, body_h) -> in
             c.move_sel(5)
         elif k == 21:  # Ctrl-U
             c.move_sel(-5)
+        elif k == ord("y"):
+            c.copy_highlighted_verse()
         elif k == ord("g"):
             c._set_col_value(c.nav_col, 1)
             c.sel = Node(c.book_idx, c.chapter, c.verse)
@@ -2503,6 +2584,9 @@ def _handle(screen, c: Controller, key, scroll, lines, focus_line, body_h) -> in
         return 0
     if k == ord("i"):
         c.begin_edit()
+        return 0
+    if k == ord("y"):
+        c.copy_highlighted_verse()
         return 0
     if k == ord("o"):
         c.open_settings()

@@ -8,10 +8,10 @@ DEFAULT_LANG = "en"
 
 S = {
     # status / mode hints
-    "nav_hint": {"en": "j/k move · l drill · h up · Enter commit · Esc exit · ? help",
-                 "zh": "j/k 移动 · l 下钻 · h 上级 · Enter 选定 · Esc 退出 · ? 帮助"},
-    "normal_hint": {"en": "j/k verse · Tab nav · z scope · +/- window · i note · / find · b back · p mark · ? help · o settings · :q quit",
-                    "zh": "j/k 经文 · Tab 导航 · z 范围 · +/- 窗口 · i 笔记 · / 查找 · b 返回 · p 书签 · ? 帮助 · o 设置 · :q 退出"},
+    "nav_hint": {"en": "j/k move · Ctrl-U/D ×5 · l/h column · Enter commit · y copy · Esc exit · ? help",
+                 "zh": "j/k 移动 · Ctrl-U/D ×5 · l/h 切换列 · Enter 选定 · y 复制 · Esc 退出 · ? 帮助"},
+    "normal_hint": {"en": "j/k verse · [/] chapter · Tab nav · y copy · z scope · +/- window · i note · / find · b/p bookmark · o settings · ? help · :q quit",
+                    "zh": "j/k 经文 · [/] 章节 · Tab 导航 · y 复制 · z 范围 · +/- 窗口 · i 笔记 · / 查找 · b/p 书签 · o 设置 · ? 帮助 · :q 退出"},
     "word_hint": {"en": "j/k select · Enter jump · Esc back",
                   "zh": "j/k 选择 · Enter 跳转 · Esc 返回"},
     "result_hint": {"en": "j/k select · Enter jump · Esc back",
@@ -50,6 +50,8 @@ S = {
     "help_open": {"en": "help — j/k scroll, q to close", "zh": "帮助 — j/k 滚动，q 关闭"},
     "find_hits": {"en": "/{pat}: {n} hits", "zh": "/{pat}：{n} 处命中"},
     "find_cleared": {"en": "find cleared", "zh": "已清除查找"},
+    "copied_verse": {"en": "copied {ref}", "zh": "已复制 {ref}"},
+    "copy_failed": {"en": "copy failed: {e}", "zh": "复制失败：{e}"},
     # editor / note
     "note_word": {"en": "note", "zh": "笔记"},
     "note_chapter": {"en": "chapter", "zh": "章"},
