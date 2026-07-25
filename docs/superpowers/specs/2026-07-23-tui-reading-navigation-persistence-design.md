@@ -13,7 +13,7 @@ Repair seven reported scriexe TUI problems: keep the Settings selection visible 
 - `]` opens the next canonical chapter at verse 1.
 - Chapter movement crosses book boundaries. `[` at Genesis 1:1 and `]` at Revelation 22 remain at their respective canonical endpoints.
 - In NAV, `Ctrl-U` moves five items up and `Ctrl-D` moves five items down, clamped to the active column. Their existing half-screen scrolling behavior remains unchanged outside NAV.
-- `y` copies the highlighted verse reference and every currently displayed translation. In NAV it copies the previewed selection; in ordinary reading mode it copies the committed focus. It is unavailable in Help, Settings, Results, Word, onboarding, and note-editing modes.
+- `y` copies the highlighted verse reference and every currently displayed translation. In NAV it copies the previewed selection; in ordinary reading mode it copies the committed focus. It is unavailable in Help, Settings, Results, Word, onboarding, and the default note-editing keymap. When optional Vim note keys are enabled, `y` is reserved for note yank operations.
 - A successful copy reports status in the TUI. A missing or failed platform clipboard command reports a non-fatal status message.
 
 ## Reading-position behavior
@@ -56,6 +56,29 @@ A small platform adapter sends UTF-8 text to:
 
 The adapter uses subprocess standard input without invoking a shell. Tests inject command discovery and process execution; they do not modify the developer's real clipboard.
 
+The same adapter can read clipboard text for optional Vim paste operations. It uses `pbpaste` on macOS, PowerShell `Get-Clipboard -Raw` on Windows, and the first available of `wl-paste --no-newline`, `xclip -selection clipboard -o`, or `xsel --clipboard --output` on Linux/Unix.
+
+## Optional Vim note keymap
+
+Settings adds a persisted `vim_keys` checkbox that is off by default. A note directly below it explains in English or Chinese that the mode provides Vim-style navigation, selection, system-clipboard copy, and paste for users who prefer that workflow. It affects only the inline note editor; the terminal-input popup editor retains its existing plain-input behavior.
+
+With `vim_keys` disabled, note editing is unchanged: typing inserts text, Esc saves and exits, and Ctrl-C discards.
+
+With `vim_keys` enabled:
+
+- editing starts in Insert mode
+- Esc changes Insert or Visual mode to Normal mode
+- `i` and `a` enter Insert mode
+- `h/j/k/l`, arrow keys, `0`, `$`, `gg`, and `G` move the cursor
+- `yy` yanks the current line to the system clipboard
+- `v` starts characterwise Visual mode and `V` starts linewise Visual mode
+- `y` in Visual mode yanks the selected text to the system clipboard and returns to Normal mode
+- `p`/`P` paste system clipboard text after/before the cursor in Normal mode; Visual `p` replaces the selection
+- `:wq` or `ZZ` saves and exits
+- `:q!` or `ZQ` discards and exits
+
+This is a focused Vim-style note keymap, not an attempt to embed or emulate all of Vim. Clipboard failures remain non-fatal and are shown in the status line.
+
 ## Component changes
 
 - `src/exeg/tui.py`
@@ -64,11 +87,14 @@ The adapter uses subprocess standard input without invoking a shell. Tests injec
   - previous/next chapter actions
   - five-item NAV movement
   - Settings/onboarding selected-line focus
-  - verse-copy formatting, platform clipboard adapter, key handling, status messages
+  - verse-copy formatting, bidirectional platform clipboard adapter, key handling, status messages
+  - optional Vim note Normal/Insert/Visual state and yank/paste operations
   - full-width-safe drawing
   - bilingual Help updates
+- `src/exeg/i18n.py`
+  - clipboard messages, Vim setting explanation, and editor-mode status strings
 - `tests/test_tui2.py`
-  - controller, key routing, rendering, clipboard, persistence, and narrow-height regressions
+  - controller, key routing, rendering, clipboard, Vim note editing, persistence, and narrow-height regressions
 - `tests/test_help_contract.py`
   - new documented key contracts where applicable
 
@@ -79,7 +105,9 @@ No packaging dependency is added.
 - Invalid persisted book/chapter/verse values are ignored and replaced by Matthew 1:1.
 - Chapter movement clamps at the canonical beginning and end.
 - Empty NAV columns remain safe during five-item movement.
-- Clipboard command absence, non-zero exit, or OS errors do not terminate curses; the status line explains that copying failed.
+- Clipboard command absence, non-zero exit, or OS errors do not terminate curses; the status line explains that copying or pasting failed.
+- Empty clipboard paste is a no-op with status feedback.
+- Popup note editing ignores `vim_keys` and preserves ordinary text entry.
 - Display-layer unavailable-version notices do not prevent installed versions from being copied.
 
 ## Test and local verification strategy
@@ -93,6 +121,7 @@ Development follows red-green-refactor. Regression tests first demonstrate each 
 - NAV ignores five-item movement
 - a 131-column draw drops `声` from Isaiah 5:7
 - no focused-verse copy action exists
+- no persisted opt-in Vim note keymap, selection yank, or clipboard paste exists
 
 After focused tests pass, verification includes:
 
