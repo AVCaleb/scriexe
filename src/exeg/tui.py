@@ -2324,7 +2324,7 @@ def _wrap_plain(text: str, width: int) -> list[str]:
 def _wrap_one(text, width):
     """Cell-aware wrapping with a hanging indent for translation bodies."""
     width = max(1, width)
-    match = re.match(r"^(  \S+ {2,})(\S.*)$", text)
+    match = re.match(r"^(  \S+ +)(\S.*)$", text)
     if match:
         prefix, body = match.groups()
         indent_width = _cell_width(prefix)
@@ -2336,17 +2336,21 @@ def _wrap_one(text, width):
 
 
 def _wrap_rtl_version(text: str, width: int) -> list[str]:
-    """Keep the version label left while aligning Hebrew body rows right."""
+    """Keep the version label left (first row only) while aligning Hebrew body
+    rows right; continuation rows use a blank label area of equal width."""
     width = max(1, width)
-    match = re.match(r"^(  \S+ {2,})(\S.*)$", text)
+    match = re.match(r"^(  \S+ +)(\S.*)$", text)
     if match:
         prefix, body = match.groups()
         prefix_width = _cell_width(prefix)
         if prefix_width < width:
             body_width = width - prefix_width
             chunks = _wrap_plain(body, body_width)
-            return [prefix + " " * max(0, body_width - _cell_width(chunk)) + chunk
-                    for chunk in chunks]
+            blank = " " * prefix_width
+            out = [prefix + " " * max(0, body_width - _cell_width(chunks[0])) + chunks[0]]
+            for chunk in chunks[1:]:
+                out.append(blank + " " * max(0, body_width - _cell_width(chunk)) + chunk)
+            return out
     chunks = _wrap_plain(text, width)
     return [" " * max(0, width - _cell_width(chunk)) + chunk for chunk in chunks]
 

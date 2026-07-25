@@ -289,6 +289,36 @@ def test_rtl_version_body_wraps_and_right_aligns_each_row():
     assert rows[-1][0].endswith("יכל")
 
 
+def test_rtl_continuation_rows_do_not_repeat_label():
+    body = "אבג דהו זחט יכל מנס עפץ קרש ת" * 3   # forces several wrapped rows
+    text = tui._version_line("WLC", body)
+    rows, _ = tui._build_rows([(text, tui.RTL_PREFIX + tui.KIND_NORMAL)],
+                              30, color=True, wrap=True)
+    assert len(rows) >= 3
+    labels = [r for r, _ in rows if "WLC" in r]
+    assert len(labels) == 1                     # exactly one label, on the first row
+    assert "WLC" in rows[0][0]
+    # continuation rows start at the body column (blank prefix), right-aligned
+    for row, _kind in rows[1:]:
+        assert "WLC" not in row
+        assert row.startswith("  " + " " * 7)     # blank label area, body right-aligned
+        assert tui._cell_width(row) == 30
+
+
+def test_vulgate_wrapped_continuation_uses_hanging_indent():
+    body = ("Ipse vocabatur Elimelech, et uxor ejus Noëmi : et duo filii, "
+            "alter Mahalon, et alter Chelion, Ephrathæi de Bethlehem Juda. "
+            "Ingressique regionem Moabitidem, morabantur ibi.")
+    text = tui._version_line("Vulgate", body)
+    rows, _ = tui._build_rows([(text, tui.KIND_NORMAL)], 50, color=True, wrap=True)
+    assert len(rows) >= 2
+    assert "Vulgate" in rows[0][0]               # label on the first row only
+    body_col = 10                                # "  " + 7-wide label + " "
+    for row, _kind in rows[1:]:
+        assert "Vulgate" not in row
+        assert row.startswith(" " * body_col)    # hanging indent at the body column
+
+
 def test_non_hebrew_translation_keeps_normal_left_aligned_kind():
     c = make_controller()
     c.nav_visible = False
