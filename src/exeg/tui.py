@@ -300,6 +300,9 @@ class Controller:
         self.note_cx: int = 0
         self.note_target: tuple = ()
         self.note_dirty = False
+        self.note_mode = "insert"
+        self.note_anchor: tuple[int, int] | None = None
+        self.note_pending = ""
         self.editor_mode = "inline"             # "inline" | "popup"
         self.show_help = False                   # `?` overlay
         self.help_scroll = 0
@@ -333,6 +336,7 @@ class Controller:
             self.highlight = m["highlight"]
         if m.get("editor") in ("inline", "popup"):
             self.editor_mode = m["editor"]
+        self.vim_keys = bool(m.get("vim_keys", False))
         if isinstance(m.get("translations"), list) and m["translations"]:
             self.translations = list(m["translations"])
         self.show_verse_marks = bool(m.get("show_verse_marks", True))
@@ -619,6 +623,9 @@ class Controller:
             {"type": "bool", "key": "show_verse_marks", "value": "on",
              "label": "Mark verses that have a note",
              "active": self.show_verse_marks},
+            {"type": "bool", "key": "vim_keys", "value": "on",
+             "label": tr(self.lang, "vim_keys_label"), "active": self.vim_keys},
+            {"type": "note", "label": tr(self.lang, "vim_keys_explain")},
             {"type": "section", "label": "Reset"},
             {"type": "restore", "key": "restore", "value": "restore",
              "label": "Restore all settings to defaults", "active": False},
@@ -655,6 +662,8 @@ class Controller:
             self._pending_optional_fetch = True
         elif it["type"] == "bool" and it["key"] == "show_verse_marks":
             self.show_verse_marks = not self.show_verse_marks
+        elif it["type"] == "bool" and it["key"] == "vim_keys":
+            self.vim_keys = not self.vim_keys
         elif it["type"] == "bool" and it["key"] == "ver":
             if it["value"] in self.translations:
                 self.translations = [v for v in self.translations if v != it["value"]]
@@ -872,7 +881,8 @@ class Controller:
         target = self.note_target
         kind = target[0] if target else "verse"
         n = self.focus
-        hint = tr(self.lang, "esc_save_hint")
+        hint = (tr(self.lang, "vim_note_hint", mode=self.note_mode.upper())
+                if self.vim_keys else tr(self.lang, "esc_save_hint"))
         if kind == "verse":
             head = f"{tr(self.lang, 'note_word')} · {n.book().en} {n.chapter}:{n.verse}  ({hint})"
         elif kind == "word":
@@ -1154,6 +1164,9 @@ class Controller:
         self.note_cy = 0
         self.note_cx = 0
         self.note_dirty = False
+        self.note_mode = "insert"
+        self.note_anchor = None
+        self.note_pending = ""
         self.editing = True
         self._popup = (self.editor_mode == "popup")
 
@@ -1163,6 +1176,9 @@ class Controller:
             self._save_note(self.note_target, text)
         self.editing = False
         self.note_target = ()
+        self.note_mode = "insert"
+        self.note_anchor = None
+        self.note_pending = ""
         self._popup = False
 
     def insert_char(self, ch):
@@ -1203,6 +1219,100 @@ class Controller:
         if dy != 0:
             cx = min(cx, len(self.note_lines[cy]))
         self.note_cy, self.note_cx = cy, cx
+
+    def note_selection_range(self):
+        if self.note_anchor is None or self.note_mode not in ("visual", "visual_line"):
+            return None
+        start, end = self.note_anchor, (self.note_cy, self.note_cx)
+        return (start, end) if start <= end else (end, start)
+
+    def _selected_note_text(self, linewise: bool = False) -> str:
+        selected = self.note_selection_range()
+        if selected is None:
+            if not linewise:
+                return ""
+            return self.note_lines[self.note_cy] + "\n"
+        (start_y, start_x), (end_y, end_x) = selected
+        if linewise or self.note_mode == "visual_line":
+            return "\n".join(self.note_lines[start_y:end_y + 1]) + "\n"
+        if start_y == end_y:
+            return self.note_lines[start_y][start_x:end_x + 1]
+        parts = [self.note_lines[start_y][start_x:]]
+        parts.extend(self.note_lines[start_y + 1:end_y])
+        parts.append(self.note_lines[end_y][:end_x + 1])
+        return "\n".join(parts)
+
+    def yank_note_selection(self, linewise: bool = False) -> tuple[bool, str]:
+        text = self._selected_note_text(linewise)
+        ok, error = _copy_clipboard(text)
+        if ok:
+            self.note_mode = "normal"
+            self.note_anchor = None
+            self.note_pending = ""
+            self.message = tr(self.lang, "copied_note")
+        else:
+            self.message = tr(self.lang, "copy_failed", e=error)
+        return ok, error
+
+    def _delete_note_selection(self) -> tuple[int, int]:
+        selected = self.note_selection_range()
+        if selected is None:
+            return self.note_cy, self.note_cx
+        (start_y, start_x), (end_y, end_x) = selected
+        if self.note_mode == "visual_line":
+            self.note_lines[start_y:end_y + 1] = [""]
+            return start_y, 0
+        if start_y == end_y:
+            line = self.note_lines[start_y]
+            self.note_lines[start_y] = line[:start_x] + line[end_x + 1:]
+        else:
+            joined = (self.note_lines[start_y][:start_x]
+                      + self.note_lines[end_y][end_x + 1:])
+            self.note_lines[start_y:end_y + 1] = [joined]
+        return start_y, start_x
+
+    def _insert_note_text(self, y: int, x: int, text: str) -> None:
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        parts = text.split("\n")
+        line = self.note_lines[y]
+        before, after = line[:x], line[x:]
+        if len(parts) == 1:
+            self.note_lines[y] = before + parts[0] + after
+            self.note_cy = y
+            self.note_cx = x + max(0, len(parts[0]) - 1)
+        else:
+            replacement = [before + parts[0], *parts[1:-1], parts[-1] + after]
+            self.note_lines[y:y + 1] = replacement
+            self.note_cy = y + len(replacement) - 1
+            self.note_cx = max(0, len(parts[-1]) - 1)
+        self.note_dirty = True
+
+    def paste_note_text(self, text: str, before: bool = False,
+                        replace_selection: bool = False) -> None:
+        if replace_selection:
+            y, x = self._delete_note_selection()
+        else:
+            y, x = self.note_cy, self.note_cx
+            if not before:
+                x = min(len(self.note_lines[y]), x + 1)
+        self._insert_note_text(y, x, text)
+        self.note_mode = "normal"
+        self.note_anchor = None
+        self.note_pending = ""
+        _vim_clamp_cursor(self)
+
+    def paste_note_clipboard(self, before: bool = False,
+                             replace_selection: bool = False) -> bool:
+        text, error = _read_clipboard()
+        if text is None:
+            self.message = tr(self.lang, "paste_failed", e=error)
+            return False
+        if text == "":
+            self.message = tr(self.lang, "paste_empty")
+            return False
+        self.paste_note_text(text, before, replace_selection)
+        self.message = tr(self.lang, "pasted_note")
+        return True
 
     # ---- commands ----------------------------------------------------------
 
@@ -1308,12 +1418,12 @@ class Controller:
                             window=self.window, lang=self.lang,
                             translations=list(self.translations),
                             show_verse_marks=self.show_verse_marks,
-                            notemark=self.notemark)
+                            notemark=self.notemark, vim_keys=self.vim_keys)
 
     DEFAULT_SETTINGS = {"highlight": "auto", "editor_mode": "inline", "window": 5,
                         "lang": "en", "translations": ["cuvs", "asv"],
                         "show_verse_marks": True, "notemark": "✎",
-                        "_versions_custom": False}
+                        "vim_keys": False, "_versions_custom": False}
 
     def restore_defaults(self):
         """Reset every preference to its default (keeps setup_done; does NOT
@@ -1931,7 +2041,9 @@ def run(controller: Controller | None = None) -> int:
                 _put(screen.stdscr, top + verse_h, 0, "─" * w,
                       _attr(KIND_COLHDR, color), w)
                 ed = controller.editor_lines()
-                _draw_lines(screen, ed, top + verse_h + 1, editor_h, 0, w, 0, color, wrap=False)
+                editor_top = top + verse_h + 1
+                _draw_lines(screen, ed, editor_top, editor_h, 0, w, 0, color, wrap=False)
+                _highlight_note_selection(screen, controller, editor_top, w, color)
             elif controller.nav_visible:
                 _draw_nav(screen, controller, top, body_h, w, color)
                 nav_w = _nav_widths(w)[1]
@@ -2076,6 +2188,13 @@ def _status(c: Controller) -> str:
         return (" HELP · j/k/↑/↓ scroll · q/Esc close " if c.lang == "en" else
                 " 帮助 · j/k/↑/↓ 滚动 · q/Esc 关闭 ")
     if c.editing:
+        if c.vim_keys:
+            key = {"insert": "vim_insert_status", "normal": "vim_normal_status",
+                   "visual": "vim_visual_status",
+                   "visual_line": "vim_visual_line_status"}.get(
+                       c.note_mode, "vim_normal_status")
+            msg = (c.message + " · ") if c.message else ""
+            return f" {msg}{tr(c.lang, key)} "
         return tr(c.lang, "insert_status")
     mode = "NAV" if c.nav_visible else ("WORD" if c.view == "word" else
                                         ("RESULT" if c.view == "result" else
@@ -2262,10 +2381,47 @@ def _draw_pane(screen, c, lines, focus_line, top, body_h, x, w, scroll, color):
     return _draw_lines(screen, lines, top, body_h, x, w, scroll, color, focus_line, wrap=True)
 
 
+def _note_selected_spans(c: Controller) -> dict[int, tuple[int, int]]:
+    selected = c.note_selection_range()
+    if selected is None:
+        return {}
+    (start_y, start_x), (end_y, end_x) = selected
+    spans = {}
+    for row in range(start_y, end_y + 1):
+        line_len = len(c.note_lines[row])
+        if c.note_mode == "visual_line":
+            spans[row] = (0, line_len)
+        elif row == start_y == end_y:
+            spans[row] = (start_x, min(line_len, end_x + 1))
+        elif row == start_y:
+            spans[row] = (start_x, line_len)
+        elif row == end_y:
+            spans[row] = (0, min(line_len, end_x + 1))
+        else:
+            spans[row] = (0, line_len)
+    return spans
+
+
+def _highlight_note_selection(screen, c: Controller, editor_top: int,
+                              width: int, color: bool) -> None:
+    for line_idx, (start, end) in _note_selected_spans(c).items():
+        row = editor_top + 2 + line_idx
+        line = c.note_lines[line_idx]
+        col = _cell_width(line[:start])
+        cells = max(1, _cell_width(line[start:end]))
+        if col >= width:
+            continue
+        try:
+            screen.stdscr.chgat(row, col, min(cells, width - col),
+                                curses.A_REVERSE | _attr(KIND_NOTE, color))
+        except (AttributeError, curses.error):
+            pass
+
+
 def _position_editor_cursor(screen, c: Controller, top, verse_h, w):
     # editor pane starts after the divider; content begins 2 lines in (header + blank)
     row = top + verse_h + 1 + 2 + c.note_cy
-    col = c.note_cx
+    col = _cell_width(c.note_lines[c.note_cy][:c.note_cx])
     h, ww = screen.stdscr.getmaxyx()
     if 0 <= row < h - 1:
         try:
@@ -2275,6 +2431,112 @@ def _position_editor_cursor(screen, c: Controller, top, verse_h, w):
             pass
 
 
+def _vim_clamp_cursor(c: Controller) -> None:
+    c.note_cy = max(0, min(len(c.note_lines) - 1, c.note_cy))
+    line = c.note_lines[c.note_cy]
+    c.note_cx = max(0, min(max(0, len(line) - 1), c.note_cx))
+
+
+def _vim_move(c: Controller, dy: int = 0, dx: int = 0) -> None:
+    c.note_cy = max(0, min(len(c.note_lines) - 1, c.note_cy + dy))
+    line = c.note_lines[c.note_cy]
+    c.note_cx = max(0, min(max(0, len(line) - 1), c.note_cx + dx))
+
+
+def _handle_vim_note_key(screen, c: Controller, ch) -> None:
+    escape = ch in (27, "\x1b")
+    if c.note_mode == "insert":
+        if escape:
+            c.note_mode = "normal"
+            c.note_anchor = None
+            c.note_pending = ""
+            _vim_clamp_cursor(c)
+        elif ch in (3, "\x03"):
+            c.end_edit(save=False)
+        elif ch in (curses.KEY_ENTER, 10, 13, "\r", "\n"):
+            c.insert_newline()
+        elif ch in (curses.KEY_BACKSPACE, 8, 127, 263, "\x7f", "\b", "\x08"):
+            c.backspace()
+        elif ch == curses.KEY_LEFT:
+            c.cursor_move(0, -1)
+        elif ch == curses.KEY_RIGHT:
+            c.cursor_move(0, 1)
+        elif ch == curses.KEY_UP:
+            c.cursor_move(-1, 0)
+        elif ch == curses.KEY_DOWN:
+            c.cursor_move(1, 0)
+        elif isinstance(ch, str) and (ch.isprintable() or ch == "\t"):
+            c.insert_char(ch)
+        return
+
+    if escape:
+        c.note_mode = "normal"
+        c.note_anchor = None
+        c.note_pending = ""
+        return
+
+    if c.note_pending:
+        pending = c.note_pending
+        c.note_pending = ""
+        if pending == "g" and ch == "g":
+            c.note_cy = 0
+            _vim_clamp_cursor(c)
+            return
+        if pending == "Z" and ch in ("Z", "Q"):
+            c.end_edit(save=(ch == "Z"))
+            return
+        if pending == "y" and ch == "y":
+            c.yank_note_selection(linewise=True)
+            return
+
+    if ch in ("h", curses.KEY_LEFT):
+        _vim_move(c, dx=-1)
+    elif ch in ("l", curses.KEY_RIGHT):
+        _vim_move(c, dx=1)
+    elif ch in ("j", curses.KEY_DOWN):
+        _vim_move(c, dy=1)
+    elif ch in ("k", curses.KEY_UP):
+        _vim_move(c, dy=-1)
+    elif ch == "0":
+        c.note_cx = 0
+    elif ch == "$":
+        c.note_cx = max(0, len(c.note_lines[c.note_cy]) - 1)
+    elif ch == "G":
+        c.note_cy = len(c.note_lines) - 1
+        _vim_clamp_cursor(c)
+    elif ch == "g":
+        c.note_pending = "g"
+    elif ch == "Z":
+        c.note_pending = "Z"
+    elif ch == "y" and c.note_mode == "normal":
+        c.note_pending = "y"
+    elif ch == "y" and c.note_mode in ("visual", "visual_line"):
+        c.yank_note_selection()
+    elif ch == "v" and c.note_mode == "normal":
+        c.note_mode = "visual"
+        c.note_anchor = (c.note_cy, c.note_cx)
+    elif ch == "V" and c.note_mode == "normal":
+        c.note_mode = "visual_line"
+        c.note_anchor = (c.note_cy, c.note_cx)
+    elif ch in ("p", "P") and c.note_mode == "normal":
+        c.paste_note_clipboard(before=(ch == "P"))
+    elif ch == "p" and c.note_mode in ("visual", "visual_line"):
+        c.paste_note_clipboard(replace_selection=True)
+    elif ch == "i" and c.note_mode == "normal":
+        c.note_mode = "insert"
+    elif ch == "a" and c.note_mode == "normal":
+        c.note_cx = min(len(c.note_lines[c.note_cy]), c.note_cx + 1)
+        c.note_mode = "insert"
+    elif ch == ":" and c.note_mode == "normal":
+        command = _prompt_line(screen, ":", [])
+        if command == "wq":
+            c.end_edit(save=True)
+        elif command == "q!":
+            c.end_edit(save=False)
+        elif command is not None:
+            c.message = f"unknown note command: {command}"
+
+
 def _edit_loop(screen, c: Controller):
     try:
         ch = screen.stdscr.get_wch()
@@ -2282,6 +2544,9 @@ def _edit_loop(screen, c: Controller):
         ch = 3  # Ctrl-C
     except Exception:
         ch = screen.stdscr.getch()
+    if c.vim_keys:
+        _handle_vim_note_key(screen, c, ch)
+        return
     if isinstance(ch, str):
         if ch == "\x1b":
             c.end_edit(save=True)

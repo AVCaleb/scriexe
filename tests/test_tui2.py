@@ -455,6 +455,174 @@ def test_begin_edit_loads_existing_note(tmp_notes):
     assert "second line" in c.note_lines
 
 
+def vim_editor_controller():
+    c = make_controller()
+    c.commit()
+    c.vim_keys = True
+    c.begin_edit()
+    return c
+
+
+def test_vim_escape_enters_normal_and_i_a_return_to_insert(tmp_notes):
+    c = vim_editor_controller()
+    c.insert_char("abc")
+    tui._handle_vim_note_key(None, c, "\x1b")
+    assert c.editing is True and c.note_mode == "normal"
+    assert c.note_cx == 2
+    tui._handle_vim_note_key(None, c, "i")
+    assert c.note_mode == "insert"
+    tui._handle_vim_note_key(None, c, "\x1b")
+    tui._handle_vim_note_key(None, c, "a")
+    assert c.note_mode == "insert" and c.note_cx == 3
+
+
+def test_vim_normal_movement_supports_hjkl_zero_dollar_gg_G(tmp_notes):
+    c = vim_editor_controller()
+    c.note_lines = ["abc", "def", "ghi"]
+    c.note_cy, c.note_cx, c.note_mode = 1, 2, "normal"
+    for key in ("h", "0", "$", "j", "k"):
+        tui._handle_vim_note_key(None, c, key)
+    assert (c.note_cy, c.note_cx) == (1, 2)
+    tui._handle_vim_note_key(None, c, "g")
+    tui._handle_vim_note_key(None, c, "g")
+    assert c.note_cy == 0
+    tui._handle_vim_note_key(None, c, "G")
+    assert c.note_cy == 2
+
+
+def test_vim_ZZ_saves_and_ZQ_discards(tmp_notes):
+    c = vim_editor_controller()
+    c.note_lines = ["save me"]
+    c.note_mode = "normal"
+    tui._handle_vim_note_key(None, c, "Z")
+    tui._handle_vim_note_key(None, c, "Z")
+    assert c.editing is False
+    assert "save me" in notes.read_verse("1Pet", 3, 18)
+
+    c = vim_editor_controller()
+    c.note_lines = ["discard me"]
+    c.note_mode = "normal"
+    tui._handle_vim_note_key(None, c, "Z")
+    tui._handle_vim_note_key(None, c, "Q")
+    assert c.editing is False
+    assert "discard me" not in notes.read_verse("1Pet", 3, 18)
+
+
+@pytest.mark.parametrize("command, saved", [("wq", True), ("q!", False)])
+def test_vim_colon_commands_exit_note(tmp_notes, monkeypatch, command, saved):
+    c = vim_editor_controller()
+    c.note_lines = ["colon note"]
+    c.note_mode = "normal"
+    monkeypatch.setattr(tui, "_prompt_line",
+                        lambda _screen, _prefix, _history: command)
+    tui._handle_vim_note_key(None, c, ":")
+    assert c.editing is False
+    assert ("colon note" in notes.read_verse("1Pet", 3, 18)) is saved
+
+
+def test_vim_yy_copies_current_line(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["first", "second"]
+    c.note_cy, c.note_cx, c.note_mode = 1, 2, "normal"
+    copied = []
+    monkeypatch.setattr(tui, "_copy_clipboard",
+                        lambda text: (copied.append(text) or True, ""))
+    tui._handle_vim_note_key(None, c, "y")
+    tui._handle_vim_note_key(None, c, "y")
+    assert copied == ["second\n"]
+
+
+def test_vim_character_visual_yank_is_inclusive(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["alpha", "beta"]
+    c.note_cy, c.note_cx, c.note_mode = 0, 2, "normal"
+    copied = []
+    monkeypatch.setattr(tui, "_copy_clipboard",
+                        lambda text: (copied.append(text) or True, ""))
+    tui._handle_vim_note_key(None, c, "v")
+    tui._handle_vim_note_key(None, c, "l")
+    tui._handle_vim_note_key(None, c, "l")
+    tui._handle_vim_note_key(None, c, "y")
+    assert copied == ["pha"]
+    assert c.note_mode == "normal"
+
+
+def test_vim_multiline_character_visual_yank(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["alpha", "beta"]
+    c.note_cy, c.note_cx, c.note_mode = 0, 3, "normal"
+    copied = []
+    monkeypatch.setattr(tui, "_copy_clipboard",
+                        lambda text: (copied.append(text) or True, ""))
+    tui._handle_vim_note_key(None, c, "v")
+    tui._handle_vim_note_key(None, c, "j")
+    tui._handle_vim_note_key(None, c, "0")
+    tui._handle_vim_note_key(None, c, "l")
+    tui._handle_vim_note_key(None, c, "y")
+    assert copied == ["ha\nbe"]
+
+
+def test_vim_line_visual_yank_includes_complete_lines(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["alpha", "beta", "gamma"]
+    c.note_cy, c.note_mode = 0, "normal"
+    copied = []
+    monkeypatch.setattr(tui, "_copy_clipboard",
+                        lambda text: (copied.append(text) or True, ""))
+    tui._handle_vim_note_key(None, c, "V")
+    tui._handle_vim_note_key(None, c, "j")
+    tui._handle_vim_note_key(None, c, "y")
+    assert copied == ["alpha\nbeta\n"]
+
+
+def test_vim_visual_selected_spans_are_visible_ranges(tmp_notes):
+    c = vim_editor_controller()
+    c.note_lines = ["alpha", "beta"]
+    c.note_anchor = (0, 2)
+    c.note_cy, c.note_cx, c.note_mode = 1, 1, "visual"
+    assert tui._note_selected_spans(c) == {0: (2, 5), 1: (0, 2)}
+    c.note_mode = "visual_line"
+    assert tui._note_selected_spans(c) == {0: (0, 5), 1: (0, 4)}
+
+
+def test_vim_p_and_P_paste_multiline_clipboard(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["abcd"]
+    c.note_cy, c.note_cx, c.note_mode = 0, 1, "normal"
+    monkeypatch.setattr(tui, "_read_clipboard", lambda: ("X\nY", ""))
+    tui._handle_vim_note_key(None, c, "p")
+    assert c.note_lines == ["abX", "Ycd"]
+
+    c.note_lines = ["abcd"]
+    c.note_cy, c.note_cx, c.note_mode = 0, 1, "normal"
+    tui._handle_vim_note_key(None, c, "P")
+    assert c.note_lines == ["aX", "Ybcd"]
+
+
+def test_vim_visual_p_replaces_selection(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["abcdef"]
+    c.note_cy, c.note_cx, c.note_mode = 0, 1, "normal"
+    monkeypatch.setattr(tui, "_read_clipboard", lambda: ("XY", ""))
+    tui._handle_vim_note_key(None, c, "v")
+    tui._handle_vim_note_key(None, c, "l")
+    tui._handle_vim_note_key(None, c, "l")
+    tui._handle_vim_note_key(None, c, "p")
+    assert c.note_lines == ["aXYef"]
+    assert c.note_mode == "normal"
+
+
+def test_vim_paste_failure_keeps_note_unchanged(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["unchanged"]
+    c.note_mode = "normal"
+    monkeypatch.setattr(tui, "_read_clipboard",
+                        lambda: (None, "clipboard unavailable"))
+    tui._handle_vim_note_key(None, c, "p")
+    assert c.note_lines == ["unchanged"]
+    assert "unavailable" in c.message
+
+
 def test_editor_insert_newline_backspace_cursor(tmp_notes):
     c = make_controller()
     c.commit()
@@ -931,6 +1099,30 @@ def test_open_settings_and_toggle_lang(tmp_notes):
     assert c.lang == "zh"
     # persisted
     assert notes.read_meta().get("lang") == "zh"
+
+
+def test_vim_note_keys_default_off_and_load_from_meta(tmp_notes):
+    assert tui.Controller(intro=True).vim_keys is False
+    notes.write_meta({"vim_keys": True})
+    assert tui.Controller().vim_keys is True
+
+
+def test_settings_explains_and_toggles_vim_note_keys(tmp_notes):
+    c = tui.Controller(intro=True)
+    c.open_settings()
+    items = c.settings_items()
+    index = next(i for i, item in enumerate(items) if item.get("key") == "vim_keys")
+    assert "copy" in items[index + 1]["label"].lower()
+    assert "paste" in items[index + 1]["label"].lower()
+    c.settings_cursor = index
+    c.toggle_settings()
+    assert c.vim_keys is True
+    assert notes.read_meta()["vim_keys"] is True
+
+    c.lang = "zh"
+    items = c.settings_items()
+    index = next(i for i, item in enumerate(items) if item.get("key") == "vim_keys")
+    assert "复制" in items[index + 1]["label"] and "粘贴" in items[index + 1]["label"]
 
 
 def test_settings_toggle_version(tmp_notes):
