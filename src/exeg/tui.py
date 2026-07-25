@@ -1496,8 +1496,8 @@ class Controller:
 HELP_MANUAL = {
     "en": """\
 exeg TUI — keys
- NAV   Tab toggle nav · j/k move · l drill · h up · Enter commit · Esc exit
- VERSE j/k next/prev verse · z scope · +/- window · b back · p bookmark
+ NAV   Tab toggle nav · j/k move · Ctrl-U/D five · l/h column · Enter commit
+ VERSE j/k verse · [ previous chapter · ] next chapter · y copy · z scope
  WORD  (in word view) j/k select occurrence · Enter jump · Esc back
  NOTES i edit note (Esc save) · :set editor popup for IME-safe input
  FIND  / find in verse preview · j/k next/prev · Enter accept · Esc clear
@@ -1510,9 +1510,11 @@ This manual describes what each mode and command changes. Scroll with j/k, the a
 # Navigator
 Press Tab to open the four-column navigator: Books, Chapters, Verses, and Words. Moving a selection updates the preview immediately but does not change the committed reading position until you press Enter.
 $ j / k or Up / Down     move within the active column
+$ Ctrl-U / Ctrl-D        move five items up / down
 $ l / Right              drill into the next column
 $ h / Left               return to the previous column
 $ g / G                  jump to the first / last item in the active column
+$ y                      copy the previewed highlighted verse
 $ Enter                  commit the selected verse or word
 $ Esc or q               close NAV and return to the committed position
 The Words column requires the optional SBLGNT or WLC original-language data; Strong's data enriches its lexical details. Install the study pack from onboarding or Settings if the column is empty.
@@ -1522,7 +1524,7 @@ The scope controls how much text surrounds the focused verse. Press z to cycle t
 $ window   show verses before and after the focus; + and - change the radius
 $ chapter  show the complete chapter
 $ verse    show only the focused verse and its attached note area
-In reading mode, j/k moves the focused verse. g/G jumps to the first/last verse in the current study set. Ctrl-D and Ctrl-U scroll by half a screen without changing the focused verse.
+In reading mode, j/k moves the focused verse. [ opens the previous chapter and ] opens the next chapter, starting at verse 1 and crossing book boundaries. y copies the highlighted verse reference and all displayed translations to the system clipboard. g/G jumps to the first/last verse in the current study set. Ctrl-D and Ctrl-U scroll by half a screen without changing the focused verse.
 WLC Hebrew scripture body rows align to the pane's right edge; version labels and all other translations remain left-aligned.
 
 # Word study
@@ -1538,7 +1540,8 @@ $ Esc          save and leave the inline editor
 $ Ctrl-C       discard this editing session
 $ Arrow keys   move the inline editor cursor
 Notes are stored as local Markdown files. A pencil mark identifies verses that already have notes.
-For IME-heavy Chinese input, use :set editor popup. The popup editor accepts normal terminal input; press Ctrl-D to finish or Ctrl-C to cancel. A blank submission keeps the existing note.
+Optional Vim-style note keys are disabled by default and can be enabled in Settings for the inline editor. Insert, Normal, and Visual modes make system clipboard copy and paste convenient: yy copies a line; v/V selects and y copies; p/P pastes; :wq or ZZ saves; :q! or ZQ discards.
+For IME-heavy Chinese input, use :set editor popup. The popup editor accepts normal terminal input and ignores Vim-style keys; press Ctrl-D to finish or Ctrl-C to cancel. A blank submission keeps the existing note.
 
 # Find in preview
 Press / in ordinary verse view with NAV closed to search the currently rendered translations and visible notes. This is a literal, case-insensitive search rather than a regular expression. It never searches old Results, Help, Settings, Word, or NAV content.
@@ -1560,7 +1563,7 @@ A bookmark is useful before following a word occurrence or moving to another pas
 
 # Settings
 Press o in verse view, or run :set with no argument, to open Settings. Use j/k to move, Enter or Space to toggle, and Esc to return.
-Settings controls interface language, visible translations, API keys, note markers, optional study data, and restoration of defaults. Translation and display choices are persisted locally.
+Settings controls interface language, visible translations, API keys, note markers, optional study data, the disabled-by-default Vim note copy/paste keymap, and restoration of defaults. Translation and display choices are persisted locally.
 The “Download all optional study data” action installs SBLGNT, WLC, Strong's, WEB, KJV, and Vulgate. Completed datasets are kept if a download is interrupted; run the action again to retry.
 
 # Command reference
@@ -1630,8 +1633,8 @@ Esc normally returns one level: it closes NAV, Word, Results, Settings, or Help;
 """,
     "zh": """\
 exeg TUI — 快捷键
- 导航   Tab 开关导航 · j/k 移动 · l 下钻 · h 返回 · Enter 选定 · Esc 退出
- 经文   j/k 上/下一节 · z 阅读范围 · +/- 窗口 · b 返回书签 · p 设置书签
+ 导航   Tab 开关导航 · j/k 移动 · Ctrl-U/D 五项 · l/h 切换列 · Enter 选定
+ 经文   j/k 上/下一节 · [ 上一章 · ] 下一章 · y 复制 · z 阅读范围
  词汇   （词汇视图）j/k 选择出现位置 · Enter 跳转 · Esc 返回
  笔记   i 编辑笔记（Esc 保存）· :set editor popup 启用输入法友好编辑
  查找   / 查找经文预览 · j/k 下一个/上一个 · Enter 确认 · Esc 清除
@@ -1644,9 +1647,11 @@ exeg TUI — 快捷键
 # 导航器
 按 Tab 打开四列导航器：书卷、章节、经节和词汇。移动选项会立即更新右侧预览，但只有按 Enter 后才会改变正式阅读位置。
 $ j / k 或 上 / 下方向键    在当前列移动
+$ Ctrl-U / Ctrl-D          向上 / 向下一次移动五项
 $ l / 右方向键             进入下一列
 $ h / 左方向键             返回上一列
 $ g / G                    跳到当前列第一项 / 最后一项
+$ y                        复制预览中高亮的经节
 $ Enter                    打开所选经节或词汇
 $ Esc 或 q                 关闭导航，回到已选定的阅读位置
 词汇列需要可选的 SBLGNT 或 WLC 原文数据；Strong's 数据会补充词汇资料。如果该列为空，请在首次设置或设置页下载研经资料。
@@ -1656,7 +1661,7 @@ $ Esc 或 q                 关闭导航，回到已选定的阅读位置
 $ window   显示焦点前后的经节；使用 + 和 - 调整范围
 $ chapter  显示完整章节
 $ verse    只显示焦点经节及其笔记区域
-在经文模式中，j/k 移动焦点经节；g/G 跳到当前研读选段的第一节/最后一节；Ctrl-D 与 Ctrl-U 滚动半屏但不改变焦点。
+在经文模式中，j/k 移动焦点经节；[ 打开上一章，] 打开下一章，均从第 1 节开始并可跨书卷；y 把高亮经节的引用和所有显示译本复制到系统剪贴板；g/G 跳到当前研读选段的第一节/最后一节；Ctrl-D 与 Ctrl-U 滚动半屏但不改变焦点。
 WLC 希伯来文经文正文的每一行都会对齐窗格右边缘；译本标签和其他译本仍保持左对齐。
 
 # 原文词汇研究
@@ -1672,7 +1677,8 @@ $ Esc          保存并退出内嵌编辑器
 $ Ctrl-C       放弃本次编辑
 $ 方向键       移动内嵌编辑器光标
 笔记以本地 Markdown 文件保存。已有笔记的经节旁会显示铅笔标记。
-中文输入法较多时，可使用 :set editor popup。弹出编辑器使用普通终端输入；Ctrl-D 完成，Ctrl-C 取消；空白提交会保留原笔记。
+可选的 Vim 风格笔记键位默认关闭，可在设置页为内嵌编辑器启用。Insert、Normal 和 Visual 模式便于使用系统剪贴板复制粘贴：yy 复制整行；v/V 选择后按 y 复制；p/P 粘贴；:wq 或 ZZ 保存；:q! 或 ZQ 放弃。
+中文输入法较多时，可使用 :set editor popup。弹出编辑器使用普通终端输入且忽略 Vim 键位；Ctrl-D 完成，Ctrl-C 取消；空白提交会保留原笔记。
 
 # 当前预览内查找
 在普通经文视图且导航器关闭时，按 / 查找当前已渲染的译本和可见笔记。这是忽略大小写的字面查找，不是正则表达式；它绝不会搜索旧结果、帮助、设置、词汇或导航内容。
@@ -1694,7 +1700,7 @@ $ :search faith|hope
 
 # 设置
 在经文视图按 o，或输入不带参数的 :set，打开设置。使用 j/k 移动，Enter 或空格切换，Esc 返回。
-设置页管理界面语言、可见译本、API Key、笔记标记、可选研经资料和恢复默认值。译本与显示选项会保存到本地。
+设置页管理界面语言、可见译本、API Key、笔记标记、可选研经资料、默认关闭的 Vim 笔记复制粘贴键位和恢复默认值。译本与显示选项会保存到本地。
 “下载全部可选研经数据”会安装 SBLGNT、WLC、Strong's、WEB、KJV 和 Vulgate。下载中断时已经完成的数据会保留；再次执行即可重试。
 
 # 命令参考

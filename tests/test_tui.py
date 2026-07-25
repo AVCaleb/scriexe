@@ -1,20 +1,29 @@
 """Unit tests for the pure Controller logic in exeg.tui (no curses)."""
-from exeg import canon, tui
+import pytest
+
+from exeg import canon, notes, tui
+
+
+@pytest.fixture(autouse=True)
+def tmp_notes(tmp_path, monkeypatch):
+    monkeypatch.setattr(notes, "notes_root", lambda: tmp_path / "notes")
 
 
 def make_controller():
-    c = tui.Controller()
+    c = tui.Controller(intro=True)
+    c._set_focus_state(tui.Node(tui._osis_index("1Pet"), 3, 18))
+    c.intro = False
     c.lang = "en"
     return c
 
 
 # ---- defaults ----
 
-def test_defaults_to_1pet_3_18_nav_visible():
-    c = make_controller()
-    assert c.focus.book().osis == "1Pet"
-    assert c.focus.chapter == 3
-    assert c.focus.verse == 18
+def test_defaults_to_matthew_1_1_nav_visible():
+    c = tui.Controller(intro=True)
+    assert c.focus.book().osis == "Matt"
+    assert c.focus.chapter == 1
+    assert c.focus.verse == 1
     assert c.nav_visible is True
     assert c.nav_col == 0
     assert c.scope == "window"

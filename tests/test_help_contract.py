@@ -66,6 +66,28 @@ def test_result_h_returns_without_changing_pre_search_verse():
     assert c.focus == before
 
 
+@pytest.mark.parametrize("lang", ["en", "zh"])
+def test_help_documents_chapter_fast_nav_and_copy_keys(lang):
+    text = "\n".join(line for line, _kind in tui.help_lines(lang))
+    for token in ("[", "]", "Ctrl-U", "Ctrl-D", "y"):
+        assert token in text
+    if lang == "en":
+        assert "previous chapter" in text and "next chapter" in text
+        assert "five" in text and "copy" in text
+    else:
+        assert "上一章" in text and "下一章" in text
+        assert "五项" in text and "复制" in text
+
+
+@pytest.mark.parametrize("lang", ["en", "zh"])
+def test_help_documents_optional_vim_note_copy_paste(lang):
+    text = "\n".join(line for line, _kind in tui.help_lines(lang))
+    for token in ("yy", "v/V", "p/P", ":wq", ":q!", "ZZ", "ZQ"):
+        assert token in text
+    assert ("disabled by default" in text if lang == "en" else "默认关闭" in text)
+    assert ("system clipboard" in text if lang == "en" else "系统剪贴板" in text)
+
+
 def test_help_status_promises_only_keys_handled_by_help_mode():
     for lang in ("en", "zh"):
         c = controller(lang)
