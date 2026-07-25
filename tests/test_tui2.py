@@ -392,6 +392,23 @@ def test_word_cursor_moves_and_jumps():
     assert c.word_idx is None
 
 
+def test_word_view_ctrl_ud_moves_five_and_gG_jumps_endpoints():
+    c = make_controller()
+    _drill_to_1pet_3_18_word(c, 7)
+    c.commit()
+    n = len(c.word_result["occurrences"])
+    assert n > 5
+    start = c.word_cursor
+    tui._handle(None, c, 4, 0, [], -1, 20)   # Ctrl-D
+    assert c.word_cursor == start + 5
+    tui._handle(None, c, 21, 0, [], -1, 20)   # Ctrl-U
+    assert c.word_cursor == start
+    tui._handle(None, c, ord("G"), 0, [], -1, 20)
+    assert c.word_cursor == n - 1
+    tui._handle(None, c, ord("g"), 0, [], -1, 20)
+    assert c.word_cursor == 0
+
+
 def test_word_view_focus_follows_cursor(tmp_notes):
     c = make_controller()
     _drill_to_1pet_3_18_word(c, 7)
@@ -499,6 +516,22 @@ def test_result_cursor_jump_and_exit():
     c.execute(":search hope")
     c.exit_result_view()
     assert c.view == "verse"
+
+
+def test_result_view_ctrl_ud_moves_five_and_gG_jumps_endpoints():
+    c = make_controller()
+    c.execute(":search hope")
+    n = len(c.result_items)
+    assert n > 5
+    start = c.result_cursor
+    tui._handle(None, c, 4, 0, [], -1, 20)   # Ctrl-D
+    assert c.result_cursor == start + 5
+    tui._handle(None, c, 21, 0, [], -1, 20)   # Ctrl-U
+    assert c.result_cursor == start
+    tui._handle(None, c, ord("G"), 0, [], -1, 20)
+    assert c.result_cursor == n - 1
+    tui._handle(None, c, ord("g"), 0, [], -1, 20)
+    assert c.result_cursor == 0
 
 
 def test_command_word_no_occurrences():
@@ -643,7 +676,7 @@ def test_vim_ZZ_saves_and_ZQ_discards(tmp_notes):
     assert "discard me" not in notes.read_verse("1Pet", 3, 18)
 
 
-@pytest.mark.parametrize("command, saved", [("wq", True), ("q!", False)])
+@pytest.mark.parametrize("command, saved", [("wq", True), ("q!", False), ("!q", False)])
 def test_vim_colon_commands_exit_note(tmp_notes, monkeypatch, command, saved):
     c = vim_editor_controller()
     c.note_lines = ["colon note"]
@@ -1016,12 +1049,22 @@ def test_active_find_uses_nN_and_enter_or_escape_clears():
     c.view = "verse"
     c.nav_visible = False
     c.find_pat = "match"
-    c.find_hits = [2, 4]
+    c.find_hits = [2, 4, 6, 8, 10, 12]
     c.find_idx = 0
     original_focus = c.focus
     tui._handle(None, c, ord("n"), 0, [], -1, 20)
     assert c.find_idx == 1 and c.focus == original_focus
     tui._handle(None, c, ord("N"), 0, [], -1, 20)
+    assert c.find_idx == 0
+    # Ctrl-D/U jump five hits
+    tui._handle(None, c, 4, 0, [], -1, 20)   # Ctrl-D
+    assert c.find_idx == 5
+    tui._handle(None, c, 21, 0, [], -1, 20)   # Ctrl-U
+    assert c.find_idx == 0
+    # g/G jump to first/last hit
+    tui._handle(None, c, ord("G"), 0, [], -1, 20)
+    assert c.find_idx == len(c.find_hits) - 1
+    tui._handle(None, c, ord("g"), 0, [], -1, 20)
     assert c.find_idx == 0
     tui._handle(None, c, 10, 0, [], -1, 20)
     assert c.find_pat == "" and c.find_hits == []

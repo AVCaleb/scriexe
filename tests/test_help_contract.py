@@ -13,7 +13,6 @@ def controller(lang="en"):
 @pytest.mark.parametrize("lang", ["en", "zh"])
 def test_help_documents_current_search_and_command_editor_contract(lang):
     text = "\n".join(line for line, _kind in tui.help_lines(lang))
-    assert "n/N" not in text
     for token in ("j /", "Enter", "Esc", "[ASV]", "[CUVS]", "Home", "Ctrl-A",
                   "End", "Ctrl-E", "Backspace", "Delete", "Ctrl-U", "Ctrl-K"):
         assert token in text

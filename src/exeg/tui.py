@@ -809,8 +809,6 @@ class Controller:
         focus_line = -1
         for (ch, v) in ids:
             is_focus = (ch, v) == focus_key
-            if is_focus and focus_line == -1:
-                focus_line = len(lines)
             note_mark = ""
             if self.show_verse_marks and notes.has_verse_note(ref.book.osis, ch, v):
                 note_mark = (self.notemark + " ") if self.notemark else ""
@@ -818,6 +816,8 @@ class Controller:
             is_highlighted = is_focus and self.scope != "chapter"
             lines.append((hdr, KIND_FOCUS if is_highlighted else
                           (KIND_DIM if self.scope == "window" else KIND_HEADER)))
+            if is_focus and self.scope != "chapter":
+                focus_line = len(lines) - 1
             for version in vers:
                 if version not in texts:
                     continue
@@ -1514,10 +1514,10 @@ HELP_MANUAL = {
     "en": """\
 exeg TUI — keys
  NAV   Tab toggle nav · j/k move · Ctrl-U/D five · l/h column · Enter commit
- VERSE j/k verse · [ previous chapter · ] next chapter · y copy · z scope
- WORD  (in word view) j/k select occurrence · Enter jump · Esc back
+ VERSE j/k verse · [/] chapter · g/G first/last · Ctrl-U/D ×5 · y copy · z scope
+ WORD  (in word view) j/k select · Ctrl-U/D ×5 · g/G first/last · Enter jump · Esc back
  NOTES i edit note (Esc save) · :set editor popup for IME-safe input
- FIND  / find in verse preview · j/k next/prev · Enter accept · Esc clear
+ FIND  / find in verse preview · n/N next/prev · Ctrl-U/D ×5 · g/G first/last · Enter accept · Esc clear
  CMDS  :passage <ref> · :versions <list> · :scope window|chapter|verse
        :word <q> · :search <regex> · :export <ref> · :set … · :help · :q
 
@@ -1547,6 +1547,8 @@ WLC Hebrew scripture body rows align to the pane's right edge; version labels an
 # Word study
 From NAV, drill into Words and press Enter on a Greek or Hebrew form. The word view shows the selected form in context, its lemma/Strong's information when available, morphology, and occurrences in the installed corpus.
 $ j / k       select an occurrence
+$ Ctrl-U/D   move five occurrences up / down
+$ g / G      jump to the first / last occurrence
 $ Enter       open the selected occurrence in its verse
 $ Esc or h    return to the verse view
 You can also open a result list directly with :word. Original-language and Strong's datasets must be installed first.
@@ -1572,7 +1574,7 @@ Submitting an empty pattern also clears find.
 :search performs a regular-expression search across the currently enabled versions that are installed locally. Every row identifies its source, such as [ASV] or [CUVS]. This is broader than /, which searches only the current verse preview.
 $ :search hope
 $ :search faith|hope
-In Results, use j/k to move the visible selection, Enter to open that verse, and Esc or h to return to the pre-search verse.
+In Results, use j/k to move the visible selection, Ctrl-U/D to move five, g/G to jump to the first/last, Enter to open that verse, and Esc or h to return to the pre-search verse.
 
 # Bookmark
 Press p in verse view to save the current location. There is one bookmark: pressing p again replaces it. Press b to return to it; returning also closes NAV. The title shows bm:<reference> while a bookmark exists.
@@ -1651,10 +1653,10 @@ Esc normally returns one level: it closes NAV, Word, Results, Settings, or Help;
     "zh": """\
 exeg TUI — 快捷键
  导航   Tab 开关导航 · j/k 移动 · Ctrl-U/D 五项 · l/h 切换列 · Enter 选定
- 经文   j/k 上/下一节 · [ 上一章 · ] 下一章 · y 复制 · z 阅读范围
- 词汇   （词汇视图）j/k 选择出现位置 · Enter 跳转 · Esc 返回
+ 经文   j/k 上/下一节 · [ 上一章 · ] 下一章 · g/G 首末节 · Ctrl-U/D ×5 · y 复制 · z 阅读范围
+ 词汇   （词汇视图）j/k 选择 · Ctrl-U/D ×5 · g/G 首末 · Enter 跳转 · Esc 返回
  笔记   i 编辑笔记（Esc 保存）· :set editor popup 启用输入法友好编辑
- 查找   / 查找经文预览 · j/k 下一个/上一个 · Enter 确认 · Esc 清除
+ 查找   / 查找经文预览 · n/N 下一个/上一个 · Ctrl-U/D ×5 · g/G 首末 · Enter 确认 · Esc 清除
  命令   :passage <经文> · :versions <列表> · :scope window|chapter|verse
         :word <查询> · :search <正则> · :export <经文> · :set … · :help · :q
 
@@ -1684,6 +1686,8 @@ WLC 希伯来文经文正文的每一行都会对齐窗格右边缘；译本标�
 # 原文词汇研究
 在导航器中进入“词汇”列，对希腊文或希伯来文词形按 Enter。词汇视图会显示该词在经文中的位置、lemma、Strong's 信息、词形分析，以及已安装语料中的出现位置。
 $ j / k       选择一个出现位置
+$ Ctrl-U/D   向上 / 向下移动五个出现位置
+$ g / G      跳到第一个 / 最后一个出现位置
 $ Enter       打开该出现位置所在的经节
 $ Esc 或 h    返回经文视图
 也可以使用 :word 直接打开查询结果。此功能需要先安装原文与 Strong's 数据。
@@ -1709,7 +1713,7 @@ $ Esc              清除查找，恢复普通经节导航
 :search 使用正则表达式搜索当前已启用且安装在本地的译本。每条结果都会标明来源，例如 [ASV] 或 [CUVS]；它比只查找当前经文预览的 / 范围更广。
 $ :search hope
 $ :search faith|hope
-在结果中使用 j/k 移动可见选项，Enter 打开所选经节，Esc 或 h 返回搜索前的经节。
+在结果中使用 j/k 移动可见选项，Ctrl-U/D 移动五项，g/G 跳到首末，Enter 打开所选经节，Esc 或 h 返回搜索前的经节。
 
 # 书签
 在经文视图按 p 保存当前位置。系统只有一个书签，再次按 p 会替换原书签。按 b 返回书签，同时关闭导航器。书签存在时，标题栏会显示 bm:<经文位置>。
@@ -2571,7 +2575,7 @@ def _handle_vim_note_key(screen, c: Controller, ch) -> None:
         command = _prompt_line(screen, ":", [])
         if command == "wq":
             c.end_edit(save=True)
-        elif command == "q!":
+        elif command in ("q!", "!q"):
             c.end_edit(save=False)
         elif command == "q":
             if c.note_dirty:
@@ -2779,6 +2783,21 @@ def _handle(screen, c: Controller, key, scroll, lines, focus_line, body_h) -> in
         if k in (ord("N"), curses.KEY_UP):
             c.find_target_line = c.find_next(-1)
             return 0
+        if k == 4:  # Ctrl-D
+            c.find_target_line = c.find_next(5)
+            return 0
+        if k == 21:  # Ctrl-U
+            c.find_target_line = c.find_next(-5)
+            return 0
+        if k == ord("g"):
+            c.find_idx = 0
+            c.find_target_line = c.find_hits[0] if c.find_hits else None
+            return 0
+        if k == ord("G"):
+            if c.find_hits:
+                c.find_idx = len(c.find_hits) - 1
+                c.find_target_line = c.find_hits[-1]
+            return 0
         if k in (10, 13, curses.KEY_ENTER):
             c.clear_find(suppress_focus=True)
             return 0
@@ -2851,6 +2870,16 @@ def _handle(screen, c: Controller, key, scroll, lines, focus_line, body_h) -> in
             c.move_word_cursor(1)
         elif k in (ord("k"), curses.KEY_UP):
             c.move_word_cursor(-1)
+        elif k == 4:  # Ctrl-D
+            c.move_word_cursor(5)
+        elif k == 21:  # Ctrl-U
+            c.move_word_cursor(-5)
+        elif k == ord("g"):
+            c.word_cursor = 0
+        elif k == ord("G"):
+            occ = c.word_result.get("occurrences", [])
+            if occ:
+                c.word_cursor = len(occ) - 1
         elif k in (10, 13, curses.KEY_ENTER):
             c.jump_word_cursor()
         elif k == 27 or k == ord("h"):
@@ -2865,6 +2894,15 @@ def _handle(screen, c: Controller, key, scroll, lines, focus_line, body_h) -> in
             c.move_result_cursor(1)
         elif k in (ord("k"), curses.KEY_UP):
             c.move_result_cursor(-1)
+        elif k == 4:  # Ctrl-D
+            c.move_result_cursor(5)
+        elif k == 21:  # Ctrl-U
+            c.move_result_cursor(-5)
+        elif k == ord("g"):
+            c.result_cursor = 0
+        elif k == ord("G"):
+            if c.result_items:
+                c.result_cursor = len(c.result_items) - 1
         elif k in (10, 13, curses.KEY_ENTER):
             c.jump_result_cursor()
         elif k == 27 or k == ord("h"):
@@ -2873,10 +2911,10 @@ def _handle(screen, c: Controller, key, scroll, lines, focus_line, body_h) -> in
     # verse view
     if k in (ord("j"), curses.KEY_DOWN):
         c.move_focus(1)
-        return 0
+        return scroll
     if k in (ord("k"), curses.KEY_UP):
         c.move_focus(-1)
-        return 0
+        return scroll
     if k == ord("["):
         c.move_chapter(-1)
         return 0
@@ -2918,11 +2956,13 @@ def _handle(screen, c: Controller, key, scroll, lines, focus_line, body_h) -> in
         if keys:
             ch, v = keys[-1]
             c.goto(Node(c.focus.book_idx, ch, v), view="verse", word_idx=None)
-        return 0
-    if k == 4:  # Ctrl-d
-        return scroll + max(1, body_h // 2)
-    if k == 21:  # Ctrl-u
-        return scroll - max(1, body_h // 2)
+        return 10**9
+    if k == 4:  # Ctrl-d: move focus five verses
+        c.move_focus(5)
+        return scroll
+    if k == 21:  # Ctrl-u: move focus five verses
+        c.move_focus(-5)
+        return scroll
     return scroll
 
 

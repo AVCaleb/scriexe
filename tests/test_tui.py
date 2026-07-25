@@ -193,8 +193,28 @@ def test_render_content_chapter_scope_no_dim_or_focus_highlight():
     kinds = {k for _, k in lines}
     assert tui.KIND_DIM not in kinds
     assert tui.KIND_FOCUS not in kinds        # chapter scope does not highlight
-    assert focus_line >= 0                     # still tracks the current verse
-    assert "3:18" in lines[focus_line][0]
+    assert focus_line == -1                   # chapter scope allows free scrolling
+    assert any("3:18" in t for t, _ in lines)  # verse still rendered
+
+
+def test_chapter_scope_scroll_is_not_clamped_to_focus():
+    c = make_controller()
+    c.commit()
+    c.scope = "chapter"
+    lines, focus_line = c.render_content()
+    assert focus_line == -1  # no focus_line → _draw_lines won't clamp scroll
+
+
+def test_verse_view_ctrl_ud_moves_five_verses():
+    c = make_controller()
+    c.commit()
+    # go to verse 1 so we have room to move 5
+    c.move_focus(-100)
+    assert c.focus.verse == 1
+    tui._handle(None, c, 4, 0, [], -1, 20)    # Ctrl-D
+    assert c.focus.verse == 6
+    tui._handle(None, c, 21, 0, [], -1, 20)   # Ctrl-U
+    assert c.focus.verse == 1
 
 
 def test_render_content_verse_scope_has_note_strip():
@@ -241,6 +261,18 @@ def test_reading_G_jumps_to_last_verse_of_chapter():
     tui._handle(None, c, ord("G"), 0, [], -1, 20)
     last = c.verse_list()[-1]
     assert (c.focus.chapter, c.focus.verse) == last
+
+
+def test_verse_view_ctrl_ud_moves_five_verses():
+    c = make_controller()
+    c.commit()
+    # go to verse 1 so we have room to move 5
+    c.move_focus(-100)
+    assert c.focus.verse == 1
+    tui._handle(None, c, 4, 0, [], -1, 20)    # Ctrl-D
+    assert c.focus.verse == 6
+    tui._handle(None, c, 21, 0, [], -1, 20)   # Ctrl-U
+    assert c.focus.verse == 1
 
 
 # ---- commands ----
