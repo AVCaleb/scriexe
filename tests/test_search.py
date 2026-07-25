@@ -24,6 +24,24 @@ def test_search_text(corpus_root):
     hits = search.search_text("living hope", ["web"])
     assert hits == [("web", "1Pet", 1, 3, "has begotten us again to a living hope")]
 
+def test_search_orders_by_canonical_reference_then_version(corpus_root):
+    # Seed matches in two books (Ruth after Genesis canonically) and two versions;
+    # request versions in reverse priority to prove ordering is not version-major.
+    for version in ("asv", "cuvs"):
+        corpus.write_verses(version, "Gen", [
+            Verse(1, 1, "hope of the promise"), Verse(1, 2, "later hope"),
+        ])
+        corpus.write_verses(version, "Ruth", [
+            Verse(1, 2, "hope in Moab"),
+        ])
+    hits = search.search_text("hope", ["cuvs", "asv"])
+    # Genesis before Ruth; within a verse, requested order cuvs then asv
+    refs = [(h[1], h[2], h[3], h[0]) for h in hits]
+    assert refs == [("Gen", 1, 1, "cuvs"), ("Gen", 1, 1, "asv"),
+                     ("Gen", 1, 2, "cuvs"), ("Gen", 1, 2, "asv"),
+                     ("Ruth", 1, 2, "cuvs"), ("Ruth", 1, 2, "asv")]
+
+
 def test_search_original_language_surface_text(corpus_root):
     seed(corpus_root)
     hits = search.search_text("Χριστ", ["sblgnt"])
