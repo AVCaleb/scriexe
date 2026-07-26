@@ -19,7 +19,7 @@ NORMAL ·  j/k 移动 ·  [/] 章节 · g/G 首末节 · V 选择
 At a 64-cell content width:
 
 ```text
-NORMAL ·  j/k 移动 ·  [/] 章节 ·  g/G 首末节 ·  V 选择 ·  y 复制
+NORMAL ·  j/k 移动 ·  [/] 章节 ·  g/G 首末节 ·  V 选择 · y  复制
        ·  z   范围 ·  +/- 窗口 ·  o   设置   ·  ? 帮助 · :q 退出
 ```
 
@@ -53,7 +53,7 @@ shortcut padded to column shortcut width
 + explanation padded to column explanation width
 ```
 
-This aligns shortcut starts, explanation starts, and following `·` separators vertically. Alignment remains active on an incomplete final row; only unused item columns on its right remain blank.
+This aligns shortcut starts, explanation starts, and following `·` separators vertically. For example, one column may contain `j/k 移动`, `y   复制`, and `?   帮助`; another may contain `[/] 章节`, `z   范围`, and `:q  退出`. Alignment remains active on an incomplete final row; only unused item columns on its right remain blank.
 
 ## Mode column
 
