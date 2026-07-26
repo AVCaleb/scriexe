@@ -913,6 +913,128 @@ def test_vim_paste_failure_keeps_note_unchanged(tmp_notes, monkeypatch):
     assert "unavailable" in c.message
 
 
+def test_insert_mode_paste_long_text_preserves_content(tmp_notes, monkeypatch):
+    """Ctrl-V paste in the default (non-vim) insert editor inserts the full
+    clipboard text without truncation and keeps the cursor in insert mode."""
+    long_text = (
+        "本节经文以“葡萄树”的衰残为隐喻，为摩押的毁灭唱起挽歌。"
+        "希实本和西比玛是摩押境内著名的葡萄产区，其向外蔓延的“美好枝子”"
+        "象征着摩押昔日繁盛的农业、贸易与国力。"
+    )
+    c = make_controller()
+    c.commit()
+    c.set_scope("verse")
+    c.begin_edit()
+    assert c.note_mode == "insert"
+    monkeypatch.setattr(tui, "_read_clipboard", lambda: (long_text, ""))
+    c.paste_note_clipboard()
+    assert c.note_lines == [long_text]
+    assert c.note_mode == "insert"  # still in insert mode
+    assert c.note_cx == len(long_text)  # cursor after pasted text
+
+
+def test_insert_mode_paste_multiline_text(tmp_notes, monkeypatch):
+    """Multi-line paste in insert mode creates separate lines."""
+    c = make_controller()
+    c.commit()
+    c.set_scope("verse")
+    c.begin_edit()
+    c.insert_char("A")
+    c.note_cx = 1  # cursor after 'A'
+    monkeypatch.setattr(tui, "_read_clipboard",
+                        lambda: ("X\nY\nZ", ""))
+    c.paste_note_clipboard()
+    assert c.note_lines == ["AX", "Y", "Z"]
+    assert c.note_mode == "insert"
+    assert c.note_cy == 2
+    assert c.note_cx == 1  # cursor after 'Z' in insert mode
+
+
+def test_insert_mode_paste_at_cursor_not_after_char(tmp_notes, monkeypatch):
+    """In insert mode, paste happens AT the cursor position (between chars),
+    not after the character at the cursor like vim normal mode."""
+    c = make_controller()
+    c.commit()
+    c.set_scope("verse")
+    c.begin_edit()
+    c.insert_char("A")
+    c.insert_char("B")
+    c.note_cx = 0  # cursor before 'A'
+    monkeypatch.setattr(tui, "_read_clipboard", lambda: ("XY", ""))
+    c.paste_note_clipboard()
+    assert c.note_lines == ["XYAB"]  # pasted at position 0, not after 'A'
+    assert c.note_mode == "insert"
+    assert c.note_cx == 2  # cursor after 'XY', before 'AB'
+
+
+def test_wrap_plain_pos_tracks_char_offsets():
+    """_wrap_plain_pos returns row texts and their original char start offsets."""
+    text = "abcdefghij"
+    result = tui._wrap_plain_pos(text, 4)
+    assert len(result) == 3
+    # Each row starts at the right offset in the original text
+    assert result[0][1] == 0
+    assert result[1][1] == 4
+    assert result[2][1] == 8
+    # The row texts are the wrapped chunks
+    assert result[0][0] == "abcd"
+    assert result[1][0] == "efgh"
+    assert result[2][0] == "ij"
+
+
+def test_editor_cursor_row_col_with_wrapping(tmp_notes):
+    """When a long note line wraps, the cursor display row accounts for the
+    sub-row within the wrapped line."""
+    c = make_controller()
+    c.commit()
+    c.set_scope("verse")
+    c.begin_edit()
+    long_line = "abcdefghij" * 5  # 50 chars, wraps at width 20
+    c.note_lines = [long_line]
+    c.note_cy = 0
+    # Cursor in the middle of the 3rd wrapped row (chars 40-49)
+    c.note_cx = 45
+    row, col = tui._editor_cursor_row_col(c, 20)
+    # The header + blank line take some display rows; the note line starts
+    # after them.  50 chars / 20 width = 3 sub-rows (0-19, 20-39, 40-49).
+    # Cursor at char 45 is on sub-row 2, col = 45-40 = 5.
+    # We check the sub-row offset from the note line start.
+    ed = c.editor_lines()
+    _r, line_row = tui._build_rows(ed, 20, False, wrap=True)
+    note_start = line_row[2]  # display row where the first note line begins
+    assert row == note_start + 2
+    assert col == 5
+
+
+def test_editor_cursor_row_col_short_line(tmp_notes):
+    """A short line that fits on one row gives the note line's display row."""
+    c = make_controller()
+    c.commit()
+    c.set_scope("verse")
+    c.begin_edit()
+    c.note_lines = ["hi"]
+    c.note_cy = 0
+    c.note_cx = 1
+    row, col = tui._editor_cursor_row_col(c, 80)
+    # Row 0 = header, row 1 = blank, row 2 = first note line
+    assert row == 2
+    assert col == 1
+
+
+def test_editor_scroll_attribute_exists(tmp_notes):
+    """Controller has editor_scroll, reset on begin/end edit."""
+    c = make_controller()
+    c.commit()
+    c.set_scope("verse")
+    assert hasattr(c, "editor_scroll")
+    c.editor_scroll = 5
+    c.begin_edit()
+    assert c.editor_scroll == 0
+    c.editor_scroll = 3
+    c.end_edit(save=False)
+    assert c.editor_scroll == 0
+
+
 def test_editor_insert_newline_backspace_cursor(tmp_notes):
     c = make_controller()
     c.commit()
@@ -1168,6 +1290,95 @@ def test_active_find_uses_nN_and_enter_or_escape_clears():
     c.find_pat, c.find_hits, c.find_idx = "again", [3], 0
     tui._handle(None, c, 27, 0, [], -1, 20)
     assert c.find_pat == "" and c.find_hits == []
+
+
+def test_status_model_normal_zh_is_structured():
+    c = make_controller()
+    c.lang = "zh"
+    c.nav_visible = False
+    model = tui._status_model(c)
+    assert model.label == "NORMAL"
+    assert model.items[:4] == (
+        tui.StatusItem("j/k", "移动"),
+        tui.StatusItem("[/]", "章节"),
+        tui.StatusItem("g/G", "首末节"),
+        tui.StatusItem("V", "选择"),
+    )
+    assert tui.StatusItem(":q", "退出") in model.items
+
+
+def test_status_model_normal_en_is_structured():
+    c = make_controller()
+    c.lang = "en"
+    c.nav_visible = False
+    model = tui._status_model(c)
+    assert model.label == "NORMAL"
+    assert model.items[0] == tui.StatusItem("j/k", "verse")
+    assert tui.StatusItem(":q", "quit") in model.items
+
+
+def status_grid_fixture():
+    return tui.StatusModel("NORMAL", (
+        tui.StatusItem("j/k", "移动"),
+        tui.StatusItem("[/]", "章节"),
+        tui.StatusItem("g/G", "首末节"),
+        tui.StatusItem("V", "选择"),
+        tui.StatusItem("y", "复制"),
+        tui.StatusItem("z", "范围"),
+        tui.StatusItem("+/-", "窗口"),
+        tui.StatusItem("o", "设置"),
+        tui.StatusItem("?", "帮助"),
+        tui.StatusItem(":q", "退出"),
+    ))
+
+
+def test_status_grid_52_cells_aligns_shortcuts_explanations_and_dots():
+    rows = tui._layout_status_grid(status_grid_fixture(), 52)
+    assert rows == [
+        "NORMAL ·  j/k 移动 ·  [/] 章节 · g/G 首末节 · V 选择",
+        "       ·  y   复制 ·  z   范围 · +/- 窗口   · o 设置",
+        "       ·  ?   帮助 ·  :q  退出",
+    ]
+    assert tui._cell_width(rows[0]) == 52
+    assert tui._cell_width(rows[1]) == 52
+
+
+def test_status_grid_64_cells_aligns_shortcuts_explanations_and_dots():
+    rows = tui._layout_status_grid(status_grid_fixture(), 64)
+    assert rows == [
+        "NORMAL ·  j/k 移动 ·  [/] 章节 ·  g/G 首末节 ·  V 选择 · y  复制",
+        "       ·  z   范围 ·  +/- 窗口 ·  o   设置   ·  ? 帮助 · :q 退出",
+    ]
+    assert all(tui._cell_width(row) == 64 for row in rows)
+
+
+def test_status_grid_last_row_keeps_explanation_alignment():
+    rows = tui._layout_status_grid(status_grid_fixture(), 52)
+    assert "?   帮助" in rows[-1]
+    assert ":q  退出" in rows[-1]
+
+
+def test_status_grid_complete_rows_keep_right_edge_padding():
+    model = tui.StatusModel("NORMAL", (
+        tui.StatusItem("a", "x"), tui.StatusItem("b", "x"),
+        tui.StatusItem("c", "x"), tui.StatusItem("d", "long"),
+    ))
+    rows = tui._layout_status_grid(model, 22)
+    assert len(rows) == 2
+    assert tui._cell_width(rows[0]) == 22
+
+
+def test_status_grid_never_splits_shortcuts():
+    for width in range(30, 81):
+        joined = "\n".join(tui._layout_status_grid(status_grid_fixture(), width))
+        for shortcut in ("j/k", "[/]", "g/G", "+/-", ":q"):
+            assert shortcut in joined
+
+
+def test_minimum_tui_width_contract():
+    expected = "NORMAL ·  j/k 移动 ·  [/] 章节"
+    assert tui._cell_width(expected) == tui.MIN_TUI_WIDTH == 30
+    assert tui._layout_status_grid(status_grid_fixture(), 30)[0] == expected
 
 
 def test_active_find_status_shows_find_specific_hints():
@@ -2007,3 +2218,270 @@ def test_put_reserves_only_the_terminal_lower_right_cell():
 
 def test_title_uses_pencil_for_focus_marker():
     assert "focus ✎" in tui._title(make_controller())
+
+
+def test_narrow_terminal_gate_at_29_cells():
+    assert tui._terminal_too_narrow(29)
+    assert not tui._terminal_too_narrow(30)
+
+
+def test_narrow_terminal_warning_is_compact():
+    lines = tui._narrow_terminal_lines("zh", 29)
+    assert any("窗口太窄" in line for line in lines)
+    assert all(tui._cell_width(line) <= 29 for line in lines)
+
+
+def test_terminal_size_warning_mentions_height_when_too_short():
+    lines = tui._terminal_size_warning("zh", 30, 3)
+    assert any("高度" in line for line in lines)
+    assert all(tui._cell_width(line) <= 30 for line in lines)
+
+
+def test_status_rows_keep_message_separate_from_grid():
+    c = make_controller()
+    c.lang = "zh"
+    c.nav_visible = False
+    c.message = "已复制"
+    rows = tui._status_rows(c, 52)
+    assert rows[0] == "已复制"
+    assert rows[1].startswith("NORMAL ·")
+
+
+def test_draw_status_rows_uses_bottom_rows():
+    class FakeWin:
+        def __init__(self):
+            self.puts = []
+        def getmaxyx(self):
+            return (24, 52)
+        def addstr(self, y, x, text, attr):
+            self.puts.append((y, text))
+
+    win = FakeWin()
+    rows = tui._layout_status_grid(status_grid_fixture(), 52)
+    used = tui._draw_status_rows(win, rows, 0, 24, 52)
+    assert used == 3
+    assert [y for y, _text in win.puts] == [21, 22, 23]
+
+
+def test_draw_status_rows_preserves_full_width_bottom_row():
+    class FakeWin:
+        def __init__(self):
+            self.inserts = []
+        def getmaxyx(self):
+            return (4, 4)
+        def insstr(self, y, x, text, attr):
+            self.inserts.append((y, x, text))
+
+    win = FakeWin()
+    tui._draw_status_rows(win, ["ABCD"], 0, 4, 4)
+    assert win.inserts == [(3, 0, "ABCD")]
+
+
+def test_status_model_covers_non_normal_modes():
+    c = make_controller()
+    c.lang = "zh"
+    c.nav_visible = False
+
+    c.verse_select = True
+    assert tui._status_model(c).label == "V-SEL"
+    c.verse_select = False
+
+    c.find_pat, c.find_hits, c.find_idx = "x", [1], 0
+    assert tui._status_model(c).label == "FIND"
+    c.clear_find()
+
+    c.nav_visible = True
+    assert tui._status_model(c).label == "NAV"
+
+
+# ===========================================================================
+# V-mode — verse visual-select (window scope only)
+# ===========================================================================
+
+def test_v_mode_enters_in_window_scope(tmp_notes):
+    c = make_controller()
+    c.commit()
+    c.set_scope("window")
+    c.begin_verse_select()
+    assert c.verse_select is True
+    assert c.verse_anchor == (c.focus.book_idx, c.focus.chapter, c.focus.verse)
+
+
+def test_v_mode_does_not_enter_outside_window_scope(tmp_notes):
+    c = make_controller()
+    c.commit()
+    c.set_scope("chapter")
+    # _handle with 'V' should not enter V-mode outside window scope
+    # (begin_verse_select is only called when scope == 'window')
+    c.begin_verse_select()  # still callable programmatically
+    assert c.verse_select is True
+    # but cycling scope away from window should exit V-mode
+    c.cycle_scope()  # chapter -> verse
+    assert c.verse_select is False
+
+
+def test_v_mode_selected_verse_keys_single(tmp_notes):
+    c = make_controller()
+    c.commit()
+    c.set_scope("window")
+    c.begin_verse_select()
+    keys = c.selected_verse_keys()
+    assert keys == [(c.focus.chapter, c.focus.verse)]
+
+
+def test_v_mode_selected_verse_keys_range(tmp_notes):
+    c = make_controller()
+    c.commit()
+    c.set_scope("window")
+    anchor_ch, anchor_v = c.focus.chapter, c.focus.verse
+    c.begin_verse_select()
+    # Move focus forward 3 verses
+    c.move_focus(3)
+    keys = c.selected_verse_keys()
+    assert len(keys) == 4  # anchor + 3 moved
+    # Keys should be sorted (ascending by verse_list order)
+    assert keys[0] == (anchor_ch, anchor_v)
+
+
+def test_v_mode_selected_verse_keys_backward(tmp_notes):
+    c = make_controller()
+    c.commit()
+    c.set_scope("window")
+    c.move_focus(2)
+    anchor_ch, anchor_v = c.focus.chapter, c.focus.verse
+    c.begin_verse_select()
+    c.move_focus(-2)
+    keys = c.selected_verse_keys()
+    assert len(keys) == 3  # anchor + 2 back
+    assert keys[-1] == (anchor_ch, anchor_v)
+
+
+def test_v_mode_end_verse_select(tmp_notes):
+    c = make_controller()
+    c.commit()
+    c.set_scope("window")
+    c.begin_verse_select()
+    assert c.verse_select is True
+    c.end_verse_select()
+    assert c.verse_select is False
+    assert c.verse_anchor is None
+    assert c.selected_verse_keys() == []
+
+
+def test_v_mode_selected_verses_text_content(tmp_notes, monkeypatch):
+    c = make_controller()
+    c.commit()
+    c.set_scope("window")
+    c.lang = "en"
+    c.begin_verse_select()
+    c.move_focus(1)
+    text = c.selected_verses_text()
+    # Should contain two verse references
+    keys = c.selected_verse_keys()
+    assert len(keys) == 2
+    for (ch, v) in keys:
+        ref_label = f"1 Peter 3:{v}"
+        assert ref_label in text
+    # Should contain translation labels
+    assert "CUVS" in text or "和合本" in text
+
+
+def test_v_mode_copy_selected_verses(tmp_notes, monkeypatch):
+    captured = []
+    monkeypatch.setattr(tui, "_copy_clipboard",
+                        lambda text, **kw: captured.append(text) or (True, ""))
+    c = make_controller()
+    c.commit()
+    c.set_scope("window")
+    c.lang = "en"
+    c.begin_verse_select()
+    c.move_focus(1)
+    c.copy_selected_verses()
+    assert c.verse_select is False  # exited after yank
+    assert len(captured) == 1
+    keys = c.selected_verse_keys()  # returns [] now since ended
+    # But verify the copied text has two verses
+    copied = captured[0]
+    assert copied.count("\n\n") == 1  # two blocks separated by blank line
+
+
+def test_v_mode_copy_failed(tmp_notes, monkeypatch):
+    monkeypatch.setattr(tui, "_copy_clipboard",
+                        lambda text, **kw: (False, "no clipboard"))
+    c = make_controller()
+    c.commit()
+    c.set_scope("window")
+    c.begin_verse_select()
+    c.move_focus(1)
+    c.copy_selected_verses()
+    assert c.verse_select is False  # still exits after copy attempt
+    assert "failed" in c.message
+
+
+def test_v_mode_render_highlights_selected(tmp_notes):
+    c = make_controller()
+    c.commit()
+    c.set_scope("window")
+    c.begin_verse_select()
+    c.move_focus(1)
+    lines, _ = c._render_verse()
+    sel_kinds = [kind for _t, kind in lines if kind == tui.KIND_SEL]
+    # At least the selected verse headers + bodies should be KIND_SEL
+    assert len(sel_kinds) >= 2
+
+
+def test_v_mode_render_no_highlight_when_inactive(tmp_notes):
+    c = make_controller()
+    c.commit()
+    c.set_scope("window")
+    # No V-mode active
+    lines, _ = c._render_verse()
+    sel_kinds = [kind for _t, kind in lines if kind == tui.KIND_SEL]
+    assert len(sel_kinds) == 0
+
+
+def test_v_mode_status_shows_v_sel(tmp_notes):
+    c = make_controller()
+    c.commit()
+    c.set_scope("window")
+    c.lang = "en"
+    c.begin_verse_select()
+    status = tui._status(c)
+    assert "V-SEL" in status
+    assert "y yank" in status
+
+
+def test_v_mode_title_shows_v_sel(tmp_notes):
+    c = make_controller()
+    c.commit()
+    c.set_scope("window")
+    c.begin_verse_select()
+    title = tui._title(c)
+    assert "V-SEL" in title
+
+
+def test_v_mode_move_chapter_exits(tmp_notes):
+    c = make_controller()
+    c.commit()
+    c.set_scope("window")
+    c.begin_verse_select()
+    assert c.verse_select is True
+    c.move_chapter(1)
+    assert c.verse_select is False
+
+
+def test_v_mode_set_scope_exits_when_not_window(tmp_notes):
+    c = make_controller()
+    c.commit()
+    c.set_scope("window")
+    c.begin_verse_select()
+    c.set_scope("chapter")
+    assert c.verse_select is False
+
+
+def test_v_mode_no_selection_text_when_inactive(tmp_notes):
+    c = make_controller()
+    c.commit()
+    c.set_scope("window")
+    assert c.selected_verses_text() == ""
+    assert c.selected_verse_keys() == []

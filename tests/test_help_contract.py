@@ -119,5 +119,5 @@ def test_help_status_promises_only_keys_handled_by_help_mode():
         c.show_help = True
         status = tui._status(c)
         assert "j/k/↑/↓" in status and "q/Esc" in status
-        assert "Ctrl-U/D" in status
+        assert "Ctrl-D" in status and "Ctrl-U" in status
         assert all(token not in status for token in ("NORMAL", "Tab", "+/-", " i ", " / "))

@@ -30,6 +30,7 @@ DEFAULT_BOOK = "Matt"
 DEFAULT_CHAPTER = 1
 DEFAULT_VERSE = 1
 DEFAULT_WINDOW = 5
+MIN_TUI_WIDTH = 30
 
 
 KIND_HEADER = "header"
@@ -65,6 +66,19 @@ class Node:
 
     def __hash__(self):
         return hash((self.book_idx, self.chapter, self.verse))
+
+
+@dataclass(frozen=True)
+class StatusItem:
+    shortcut: str
+    explanation: str
+
+
+@dataclass(frozen=True)
+class StatusModel:
+    label: str
+    items: tuple[StatusItem, ...]
+    message: str = ""
 
 
 @dataclass
@@ -312,6 +326,7 @@ class Controller:
         self.note_anchor: tuple[int, int] | None = None
         self.note_pending = ""
         self.editor_mode = "inline"             # "inline" | "popup"
+        self.editor_scroll = 0                     # scroll offset for wrapped inline editor
         self.show_help = False                   # `?` overlay
         self.help_scroll = 0
         self.settings_cursor = 0
@@ -323,6 +338,10 @@ class Controller:
 
         # bookmark (set with p, return with b) — a single saved location
         self.bookmark: tuple | None = None    # (Node, view, word_idx)
+
+        # verse visual-select (V-mode): select a range of verses to yank
+        self.verse_select = False
+        self.verse_anchor: tuple[int, int, int] | None = None  # (book_idx, ch, v)
 
         # search-within-preview
         self.find_pat: str = ""
@@ -809,15 +828,21 @@ class Controller:
             return lines, -1
         focus_key = (n.chapter, n.verse)
         focus_line = -1
+        sel_keys = set(self.selected_verse_keys()) if self.verse_select else set()
         for (ch, v) in ids:
             is_focus = (ch, v) == focus_key
+            is_selected = (ch, v) in sel_keys
             note_mark = ""
             if self.show_verse_marks and notes.has_verse_note(ref.book.osis, ch, v):
                 note_mark = (self.notemark + " ") if self.notemark else ""
             hdr = f"{note_mark}{_reference_label(ref.book, ch, v, self.lang)}"
-            is_highlighted = is_focus and self.scope != "chapter"
-            lines.append((hdr, KIND_FOCUS if is_highlighted else
-                          (KIND_DIM if self.scope == "window" else KIND_HEADER)))
+            if is_selected:
+                hdr_kind = KIND_SEL
+            elif is_focus and self.scope != "chapter":
+                hdr_kind = KIND_FOCUS
+            else:
+                hdr_kind = KIND_DIM if self.scope == "window" else KIND_HEADER
+            lines.append((hdr, hdr_kind))
             if is_focus:
                 focus_line = len(lines) - 1
             for version in vers:
@@ -826,9 +851,13 @@ class Controller:
                 label = display.LABELS.get(version, version.upper())
                 text = texts[version].get((ch, v))
                 body = text if text else f"[not in {label}]"
-                kind = (KIND_FOCUS if is_highlighted else
-                        (KIND_DIM if self.scope == "window" else KIND_NORMAL))
-                if version == "wlc":
+                if is_selected:
+                    kind = KIND_SEL
+                elif is_focus and self.scope != "chapter":
+                    kind = KIND_FOCUS
+                else:
+                    kind = KIND_DIM if self.scope == "window" else KIND_NORMAL
+                if version == "wlc" and not is_selected:
                     kind = RTL_PREFIX + kind
                 lines.append((_version_line(label, body), kind))
         if (self.scope == "verse" and focus_line != -1 and not self.nav_visible
@@ -1097,6 +1126,7 @@ class Controller:
     def move_chapter(self, delta: int):
         if self.view != "verse" or delta == 0:
             return
+        self.end_verse_select()
         book_idx = self.focus.book_idx
         chapter = self.focus.chapter + (1 if delta > 0 else -1)
         if chapter < 1:
@@ -1153,15 +1183,89 @@ class Controller:
     def cycle_scope(self):
         i = SCOPES.index(self.scope)
         self.scope = SCOPES[(i + 1) % len(SCOPES)]
+        if self.scope != "window":
+            self.end_verse_select()
 
     def set_scope(self, name: str) -> bool:
         if name not in SCOPES:
             return False
         self.scope = name
+        if self.scope != "window":
+            self.end_verse_select()
         return True
 
     def resize_window(self, delta: int):
         self.window = max(1, min(40, self.window + delta))
+
+    # ---- verse visual-select (V-mode) --------------------------------------
+
+    def begin_verse_select(self):
+        """Enter V-mode: anchor the selection at the current focus verse."""
+        self.verse_select = True
+        self.verse_anchor = (self.focus.book_idx, self.focus.chapter, self.focus.verse)
+
+    def end_verse_select(self):
+        """Exit V-mode without yanking."""
+        self.verse_select = False
+        self.verse_anchor = None
+
+    def selected_verse_keys(self) -> list[tuple[int, int]]:
+        """Return the sorted list of ``(chapter, verse)`` pairs in the current
+        V-mode selection (anchor → focus, inclusive)."""
+        if not self.verse_select or self.verse_anchor is None:
+            return []
+        keys = self.verse_list()
+        if not keys:
+            return []
+        anchor_key = (self.verse_anchor[1], self.verse_anchor[2])
+        focus_key = (self.focus.chapter, self.focus.verse)
+        try:
+            ai = keys.index(anchor_key)
+        except ValueError:
+            ai = 0
+        try:
+            fi = keys.index(focus_key)
+        except ValueError:
+            fi = ai
+        lo, hi = min(ai, fi), max(ai, fi)
+        return keys[lo:hi + 1]
+
+    def selected_verses_text(self) -> str:
+        """Format all selected verses (with every displayed translation) into a
+        single clipboard-ready string."""
+        keys = self.selected_verse_keys()
+        if not keys:
+            return ""
+        book = self.focus.book()
+        vers = self.effective_versions()
+        blocks: list[str] = []
+        for (ch, v) in keys:
+            ref = refs.Ref(book, ch, v, ch, v)
+            texts, _notices = _gather(ref, vers)
+            lines = [_reference_label(book, ch, v, self.lang)]
+            for version in vers:
+                text = texts.get(version, {}).get((ch, v))
+                if text:
+                    label = display.LABELS.get(version, version.upper())
+                    lines.append(f"{label}  {text}")
+            blocks.append("\n".join(lines))
+        return "\n\n".join(blocks) + "\n"
+
+    def copy_selected_verses(self):
+        """Yank all selected verses to the system clipboard."""
+        text = self.selected_verses_text()
+        if not text:
+            self.message = ("no verses selected" if self.lang == "en" else "未选中经文")
+            return
+        keys = self.selected_verse_keys()
+        ok, error = _copy_clipboard(text)
+        if ok:
+            ref = _reference_label(self.focus.book(), keys[0][0], keys[0][1], self.lang)
+            ref2 = _reference_label(self.focus.book(), keys[-1][0], keys[-1][1], self.lang)
+            self.message = tr(self.lang, "copied_verses", a=ref, b=ref2)
+        else:
+            self.message = tr(self.lang, "copy_failed", e=error)
+        self.end_verse_select()
 
     # ---- pin ---------------------------------------------------------------
 
@@ -1219,6 +1323,7 @@ class Controller:
         self.note_mode = "normal" if self.vim_keys else "insert"
         self.note_anchor = None
         self.note_pending = ""
+        self.editor_scroll = 0
         self.editing = True
         self._popup = (self.editor_mode == "popup")
 
@@ -1232,6 +1337,7 @@ class Controller:
         self.note_anchor = None
         self.note_pending = ""
         self._popup = False
+        self.editor_scroll = 0
 
     def insert_char(self, ch):
         line = self.note_lines[self.note_cy]
@@ -1345,13 +1451,24 @@ class Controller:
             y, x = self._delete_note_selection()
         else:
             y, x = self.note_cy, self.note_cx
-            if not before:
-                x = min(len(self.note_lines[y]), x + 1)
+            if self.note_mode != "insert":
+                # In vim normal mode the cursor sits *on* a character;
+                # paste after it (or before if `before`).
+                if not before:
+                    x = min(len(self.note_lines[y]), x + 1)
+            # In insert mode the cursor is *between* characters; paste
+            # exactly at the cursor position.
         self._insert_note_text(y, x, text)
-        self.note_mode = "normal"
         self.note_anchor = None
         self.note_pending = ""
-        _vim_clamp_cursor(self)
+        if self.note_mode == "insert":
+            # In insert mode the cursor sits *between* characters, so place
+            # it right after the pasted text (no -1 vim offset).
+            self.note_cx = min(len(self.note_lines[self.note_cy]),
+                              self.note_cx + 1)
+        else:
+            self.note_mode = "normal"
+            _vim_clamp_cursor(self)
 
     def paste_note_clipboard(self, before: bool = False,
                              replace_selection: bool = False) -> bool:
@@ -1552,11 +1669,11 @@ class Controller:
 HELP_MANUAL = {
     "en": """\
 exeg TUI — keys
- NAV   Tab toggle nav · j/k move · Ctrl-U/D five · l/h column · Enter commit
- VERSE j/k verse · [/] chapter · g/G first/last · Ctrl-U/D ×5 · y copy · z scope
- WORD  (in word view) j/k select · Ctrl-U/D ×5 · g/G first/last · Enter jump · Esc back
+ NAV   Tab toggle nav · j/k move · Ctrl-D down 5 · Ctrl-U up 5 · l/h column · Enter read
+ VERSE j/k verse · [/] chapter · g/G first/last · Ctrl-D down 5 · Ctrl-U up 5 · y copy · z scope
+ WORD  (in word view) j/k select · Ctrl-D down 5 · Ctrl-U up 5 · g/G first/last · Enter jump · Esc back
  NOTES i edit note (Esc save) · :set editor popup for IME-safe input
- FIND  / find in verse preview · n/N next/prev · Ctrl-U/D ×5 · g/G first/last · Enter accept · Esc clear
+ FIND  / find in verse preview · n/N next/prev · Ctrl-D down 5 · Ctrl-U up 5 · g/G first/last · Enter accept · Esc clear
  CMDS  :passage <ref> · :versions <list> · :scope window|chapter|verse
        :word <q> · :search <regex> · :export <ref> · :set … · :help · :q
 
@@ -1581,6 +1698,7 @@ $ window   show verses before and after the focus; + and - change the radius
 $ chapter  show the complete chapter; the viewport follows an invisible verse focus
 $ verse    show only the focused verse and its attached note area
 In reading mode, j/k moves the focused verse. [ opens the previous chapter and ] opens the next chapter, starting at verse 1 and crossing book boundaries. y copies the focused verse reference and all displayed translations to the system clipboard. g/G jumps to the first/last verse in the current study set. Ctrl-D and Ctrl-U move the focus five verses down/up.
+$ V           (window scope only) enter verse visual-select mode: j/k extends the selection verse-by-verse, y yanks all selected verses (with every displayed translation) to the clipboard, Esc cancels
 Window and Verse scopes mark the focused verse. Chapter scope keeps the full chapter visually unhighlighted while following every successful focus movement immediately, including the first movement near a chapter boundary. Copy, notes, bookmarks, and saved reading position still use that invisible focus.
 WLC Hebrew scripture body rows align to the pane's right edge; version labels and all other translations remain left-aligned.
 
@@ -1597,6 +1715,7 @@ You can also open a result list directly with :word. Original-language and Stron
 Close NAV, focus a verse, and press i to edit its note. In word view, i edits a note attached to that word occurrence instead.
 $ Esc          save and leave the inline editor
 $ Ctrl-C       discard this editing session
+$ Ctrl-V       paste from the system clipboard (multi-line text wraps)
 $ Arrow keys   move the inline editor cursor
 Notes are stored as local Markdown files. A pencil mark identifies verses that already have notes.
 Optional Vim-style note keys are disabled by default and can be enabled in Settings for the inline editor. The note opens in Normal mode, so you can yank text without typing: press i/a to insert, Esc to return to Normal. Normal/Visual modes make system clipboard copy and paste convenient: yy copies a line; v/V selects and y copies; p/P pastes; :wq or ZZ saves; :q!, :!q, or ZQ discards; :q leaves an unchanged note without saving.
@@ -1694,11 +1813,11 @@ Esc normally returns one level: it closes NAV, Word, Results, Settings, or Help;
 """,
     "zh": """\
 exeg TUI — 快捷键
- 导航   Tab 开关导航 · j/k 移动 · Ctrl-U/D 五项 · l/h 切换列 · Enter 选定
- 经文   j/k 上/下一节 · [ 上一章 · ] 下一章 · g/G 首末节 · Ctrl-U/D ×5 · y 复制 · z 阅读范围
- 词汇   （词汇视图）j/k 选择 · Ctrl-U/D ×5 · g/G 首末 · Enter 跳转 · Esc 返回
+ 导航   Tab 开关导航 · j/k 移动 · Ctrl-D 下5 · Ctrl-U 上5 · l/h 切换列 · Enter 阅读
+ 经文   j/k 上/下一节 · [ 上一章 · ] 下一章 · g/G 首末节 · Ctrl-D 下5 · Ctrl-U 上5 · y 复制 · z 阅读范围
+ 词汇   （词汇视图）j/k 选择 · Ctrl-D 下5 · Ctrl-U 上5 · g/G 首末 · Enter 跳转 · Esc 返回
  笔记   i 编辑笔记（Esc 保存）· :set editor popup 启用输入法友好编辑
- 查找   / 查找经文预览 · n/N 下一个/上一个 · Ctrl-U/D ×5 · g/G 首末 · Enter 确认 · Esc 清除
+ 查找   / 查找经文预览 · n/N 下一个/上一个 · Ctrl-D 下5 · Ctrl-U 上5 · g/G 首末 · Enter 确认 · Esc 清除
  命令   :passage <经文> · :versions <列表> · :scope window|chapter|verse
         :word <查询> · :search <正则> · :export <经文> · :set … · :help · :q
 
@@ -1723,6 +1842,7 @@ $ window   显示焦点前后的经节；使用 + 和 - 调整范围
 $ chapter  显示完整章节；视窗跟随不可见的经节焦点
 $ verse    只显示焦点经节及其笔记区域
 在经文模式中，j/k 移动焦点经节；[ 打开上一章，] 打开下一章，均从第 1 节开始并可跨书卷；y 把焦点经节的引用和所有显示译本复制到系统剪贴板；g/G 跳到当前研读选段的第一节/最后一节；Ctrl-D 与 Ctrl-U 向下/向上移动五节。
+$ V           （仅窗口范围）进入经文可视选择模式：j/k 逐节扩展选择，y 复制所有选中经节（含每个显示译本）到剪贴板，Esc 取消
 Window 和 Verse 范围会标出焦点经节；Chapter 范围不显示高亮，使整章画面保持简洁，但每次焦点成功移动时视窗都会立即跟随，包括章节边界附近的第一次移动。复制、笔记、书签和阅读位置保存仍以这个不可见焦点为准。
 WLC 希伯来文经文正文的每一行都会对齐窗格右边缘；译本标签和其他译本仍保持左对齐。
 
@@ -1993,7 +2113,7 @@ def _attr(kind: str, color: bool) -> int:
     if kind.startswith(RTL_PREFIX):
         kind = kind[len(RTL_PREFIX):]
     if not color:
-        if kind in (KIND_FOCUS, KIND_TITLE, KIND_TOKEN, KIND_OCCUR_SEL):
+        if kind in (KIND_FOCUS, KIND_TITLE, KIND_TOKEN, KIND_OCCUR_SEL, KIND_SEL):
             return curses.A_BOLD
         if kind == KIND_DIM:
             return curses.A_DIM
@@ -2070,6 +2190,135 @@ def _put(win, y, x, s, attr, maxw):
         pass
 
 
+def _pad_cells(text: str, width: int) -> str:
+    return text + " " * max(0, width - _cell_width(text))
+
+
+def _status_separator(width: int) -> str:
+    """Return a separator of exactly *width* terminal cells."""
+    return " ·" + " " * max(1, width - 2)
+
+
+def _layout_status_grid(model: StatusModel, width: int) -> list[str]:
+    """Lay structured status items out as a responsive, cell-aware grid."""
+    width = max(1, width)
+    items = list(model.items)
+    if not items:
+        return [_slice_cells(model.label, width)]
+
+    label_width = _cell_width(model.label)
+    first_prefix = model.label + " ·  "
+    continuation_prefix = " " * label_width + " ·  "
+    prefix_width = _cell_width(first_prefix)
+
+    chosen = None
+    for columns in range(len(items), 0, -1):
+        key_widths = []
+        explanation_widths = []
+        for col in range(columns):
+            column_items = items[col::columns]
+            key_widths.append(max(_cell_width(item.shortcut) for item in column_items))
+            explanation_widths.append(
+                max(_cell_width(item.explanation) for item in column_items))
+        cell_widths = [k + 1 + e for k, e in zip(key_widths, explanation_widths)]
+        base_width = prefix_width + sum(cell_widths) + 3 * (columns - 1)
+        if base_width <= width:
+            chosen = (columns, key_widths, explanation_widths, cell_widths,
+                      width - base_width)
+            break
+
+    if chosen is None:
+        # This is reachable only below the supported minimum width; preserve
+        # command tokens and let the narrow-terminal gate handle the UI.
+        return _wrap_plain(first_prefix + items[0].shortcut + " "
+                           + items[0].explanation, width)
+
+    columns, key_widths, explanation_widths, cell_widths, extra = chosen
+
+    # At the exact minimum width, the globally aligned two-column grid is one
+    # cell too wide because later explanations are longer. Preserve the
+    # promised compact first row, then degrade remaining hints to one aligned
+    # column until another width can support the full grid.
+    if columns == 1 and len(items) >= 2:
+        first_cells = [item.shortcut + " " + item.explanation
+                       for item in items[:2]]
+        compact_base = (prefix_width + sum(_cell_width(cell) for cell in first_cells)
+                        + 3)
+        if compact_base <= width:
+            compact_separator = _status_separator(3 + width - compact_base)
+            rows = [first_prefix + first_cells[0] + compact_separator + first_cells[1]]
+            for item in items[2:]:
+                shortcut = _pad_cells(item.shortcut, key_widths[0])
+                explanation = _pad_cells(item.explanation, explanation_widths[0])
+                rows.append((continuation_prefix + shortcut + " " + explanation).rstrip())
+            return rows
+
+    separator_widths: list[int] = []
+    if columns > 1:
+        quotient, remainder = divmod(extra, columns - 1)
+        separator_widths = [
+            3 + quotient + (1 if col < remainder else 0)
+            for col in range(columns - 1)
+        ]
+
+    rows = []
+    for start in range(0, len(items), columns):
+        row_items = items[start:start + columns]
+        row = first_prefix if start == 0 else continuation_prefix
+        for col, item in enumerate(row_items):
+            shortcut = _pad_cells(item.shortcut, key_widths[col])
+            explanation = _pad_cells(item.explanation, explanation_widths[col])
+            row += shortcut + " " + explanation
+            if col < len(row_items) - 1:
+                row += _status_separator(separator_widths[col])
+        rows.append(row if len(row_items) == columns else row.rstrip())
+    return rows
+
+
+def _status_rows(c: Controller, width: int) -> list[str]:
+    model = _status_model(c)
+    rows = _layout_status_grid(StatusModel(model.label, model.items), width)
+    if model.message:
+        return _wrap_plain(model.message, max(1, width)) + rows
+    return rows
+
+
+def _terminal_too_narrow(width: int) -> bool:
+    return width < MIN_TUI_WIDTH
+
+
+def _narrow_terminal_lines(lang: str, width: int) -> list[str]:
+    text = ("Terminal too narrow — resize to at least 30 columns"
+            if lang == "en" else "窗口太窄 — 请调整到至少 30 列")
+    return _wrap_plain(text, max(1, width))
+
+
+def _terminal_size_warning(lang: str, width: int, height: int) -> list[str]:
+    if _terminal_too_narrow(width):
+        return _narrow_terminal_lines(lang, width)
+    text = ("Terminal height too small — resize to at least 4 rows"
+            if lang == "en" else "窗口高度不足 — 请调整到至少 4 行")
+    return _wrap_plain(text, max(1, width))
+
+
+def _draw_status_rows(stdscr, rows: list[str], attr: int,
+                      h: int, w: int) -> int:
+    usable = max(1, min(len(rows), max(1, h - 2)))
+    visible = rows[-usable:]
+    for index, row in enumerate(visible):
+        y = h - usable + index
+        if y == h - 1 and _cell_width(row) >= w and hasattr(stdscr, "insstr"):
+            try:
+                # insstr does not advance beyond the lower-right cell, so a
+                # fully justified final row can safely occupy the full width.
+                stdscr.insstr(y, 0, _slice_cells(row, w), attr)
+            except curses.error:
+                pass
+        else:
+            _put(stdscr, y, 0, row, attr, w)
+    return usable
+
+
 def run(controller: Controller | None = None) -> int:
     if controller is None:
         controller = Controller()
@@ -2087,15 +2336,35 @@ def run(controller: Controller | None = None) -> int:
             if controller.editing and getattr(controller, "_popup", False):
                 _edit_popup(screen, controller)
                 continue
+            h, w = screen.stdscr.getmaxyx()
+            if _terminal_too_narrow(w) or h < 4:
+                screen.stdscr.erase()
+                warning = _terminal_size_warning(controller.lang, w, h)
+                visible = warning[:max(1, h)]
+                warning_top = max(0, (h - len(visible)) // 2)
+                for index, text in enumerate(visible):
+                    x = max(0, (w - _cell_width(text)) // 2)
+                    _put(screen.stdscr, warning_top + index, x, text,
+                         _attr(KIND_MSG, color), w)
+                screen.stdscr.refresh()
+                try:
+                    key = screen.stdscr.getch()
+                except KeyboardInterrupt:
+                    key = 3
+                if key in (ord("q"), 3):
+                    controller.running = False
+                continue
+
             lines, focus_line = controller.render_content()
             find_active = (controller.find_allowed() and controller.find_hits
                            and controller.find_idx >= 0)
             if find_active:
                 lines = _apply_find(lines, controller)
             screen.stdscr.erase()
-            h, w = screen.stdscr.getmaxyx()
             _put(screen.stdscr, 0, 0, _title(controller), _attr(KIND_TITLE, color), w)
-            top, bottom = 1, h - 1
+            status_lines = _status_rows(controller, w)
+            status_rows = min(len(status_lines), max(1, h - 2))
+            top, bottom = 1, h - status_rows
             body_h = bottom - top
             if controller.intro:
                 scroll = _draw_lines(screen, lines, top, body_h, 0, w, 0, color,
@@ -2114,7 +2383,21 @@ def run(controller: Controller | None = None) -> int:
                       _attr(KIND_COLHDR, color), w)
                 ed = controller.editor_lines()
                 editor_top = top + verse_h + 1
-                _draw_lines(screen, ed, editor_top, editor_h, 0, w, 0, color, wrap=False)
+                avail = max(8, w)
+                # Compute cursor display row for scroll-keeping
+                cursor_row, _ = _editor_cursor_row_col(controller, avail)
+                ed_rows, _ = _build_rows(ed, avail, color, wrap=True)
+                total_ed_rows = len(ed_rows)
+                es = controller.editor_scroll
+                if cursor_row < es:
+                    es = cursor_row
+                elif cursor_row >= es + editor_h:
+                    es = cursor_row - editor_h + 1
+                es = max(0, min(es, max(0, total_ed_rows - editor_h)))
+                controller.editor_scroll = es
+                _draw_lines(screen, ed, editor_top, editor_h, 0, w,
+                            controller.editor_scroll, color, wrap=True,
+                            focus_line=-1)
                 _highlight_note_selection(screen, controller, editor_top, w, color)
             elif controller.nav_visible:
                 _draw_nav(screen, controller, top, body_h, w, color)
@@ -2135,7 +2418,8 @@ def run(controller: Controller | None = None) -> int:
                     scroll = _draw_pane(screen, controller, lines, pane_focus, top,
                                         body_h, 0, w, scroll, color)
                     controller.suppress_focus_once = False
-            _put(screen.stdscr, h - 1, 0, _status(controller), _attr(KIND_STATUS, color), w)
+            _draw_status_rows(screen.stdscr, status_lines,
+                              _attr(KIND_STATUS, color), h, w)
             if controller.editing and not controller.show_help:
                 _position_editor_cursor(screen, controller, top, verse_h, w)
             else:
@@ -2257,41 +2541,133 @@ def _title(c: Controller) -> str:
         edit_mode = ({"visual_line": "V-LINE"}.get(c.note_mode,
                      c.note_mode.upper()) if c.vim_keys else "INSERT")
         ind += f" · {edit_mode}"
+    if c.verse_select:
+        ind += " · V-SEL"
     return f" exeg · {crumb} · scope:{c.scope}{extra}{' ±'+str(c.window) if c.scope=='window' else ''}{ind} "
 
 
-def _status(c: Controller) -> str:
+_NORMAL_STATUS_ITEMS = {
+    "en": (
+        StatusItem("j/k", "verse"), StatusItem("[/]", "chapter"),
+        StatusItem("g/G", "first/last"), StatusItem("V", "select"),
+        StatusItem("y", "copy"), StatusItem("z", "scope"),
+        StatusItem("+/-", "window"), StatusItem("i", "note"),
+        StatusItem("/", "find"), StatusItem("b", "back"),
+        StatusItem("p", "set bookmark"), StatusItem("o", "settings"),
+        StatusItem("?", "help"), StatusItem(":q", "quit"),
+    ),
+    "zh": (
+        StatusItem("j/k", "移动"), StatusItem("[/]", "章节"),
+        StatusItem("g/G", "首末节"), StatusItem("V", "选择"),
+        StatusItem("y", "复制"), StatusItem("z", "范围"),
+        StatusItem("+/-", "窗口"), StatusItem("i", "笔记"),
+        StatusItem("/", "查找"), StatusItem("b", "返回"),
+        StatusItem("p", "设书签"), StatusItem("o", "设置"),
+        StatusItem("?", "帮助"), StatusItem(":q", "退出"),
+    ),
+}
+
+
+def _make_status_items(lang: str, en: tuple[tuple[str, str], ...],
+                       zh: tuple[tuple[str, str], ...]) -> tuple[StatusItem, ...]:
+    pairs = zh if lang == "zh" else en
+    return tuple(StatusItem(shortcut, explanation)
+                 for shortcut, explanation in pairs)
+
+
+def _status_model(c: Controller) -> StatusModel:
+    lang = c.lang if c.lang in ("en", "zh") else "en"
     if c.intro:
-        return " first-run setup · j/k move · Enter select · Begin to start "
+        return StatusModel("SETUP", _make_status_items(lang,
+            (("j/k", "move"), ("Enter", "select"), ("Begin", "start")),
+            (("j/k", "移动"), ("Enter", "选择"), ("Begin", "开始"))))
     if c.show_help:
-        return (" HELP · j/k/↑/↓ scroll · Ctrl-U/D ×5 · q/Esc close " if c.lang == "en" else
-                " 帮助 · j/k/↑/↓ 滚动 · Ctrl-U/D ×5 · q/Esc 关闭 ")
+        return StatusModel("HELP", _make_status_items(lang,
+            (("j/k/↑/↓", "scroll"), ("Ctrl-D", "down 5"),
+             ("Ctrl-U", "up 5"), ("q/Esc", "close")),
+            (("j/k/↑/↓", "滚动"), ("Ctrl-D", "下5"),
+             ("Ctrl-U", "上5"), ("q/Esc", "关闭"))))
     if c.editing:
-        if c.vim_keys:
-            key = {"insert": "vim_insert_status", "normal": "vim_normal_status",
-                   "visual": "vim_visual_status",
-                   "visual_line": "vim_visual_line_status"}.get(
-                       c.note_mode, "vim_normal_status")
-            msg = (c.message + " · ") if c.message else ""
-            return f" {msg}{tr(c.lang, key)} "
-        return tr(c.lang, "insert_status")
+        if not c.vim_keys:
+            return StatusModel("INSERT", _make_status_items(lang,
+                (("type", "edit"), ("Esc", "save"), ("Ctrl-C", "discard"),
+                 ("Ctrl-V", "paste"), ("Backspace", "delete")),
+                (("输入", "编辑"), ("Esc", "保存"), ("Ctrl-C", "放弃"),
+                 ("Ctrl-V", "粘贴"), ("Backspace", "删除"))), c.message)
+        label = {"insert": "INSERT", "normal": "NORMAL", "visual": "VISUAL",
+                 "visual_line": "V-LINE"}.get(c.note_mode, "NORMAL")
+        pairs = {
+            "insert": (
+                (("Esc", "Normal"), ("Ctrl-C", "discard"), ("Ctrl-V", "paste")),
+                (("Esc", "普通模式"), ("Ctrl-C", "放弃"), ("Ctrl-V", "粘贴"))),
+            "normal": (
+                (("i/a", "insert"), ("v/V", "select"), ("yy", "copy"),
+                 ("p/P", "paste"), (":wq/ZZ", "save"), (":q/:q!/!q", "exit")),
+                (("i/a", "插入"), ("v/V", "选择"), ("yy", "复制"),
+                 ("p/P", "粘贴"), (":wq/ZZ", "保存"), (":q/:q!/!q", "退出"))),
+            "visual": (
+                (("move", ""), ("y", "copy"), ("p", "replace"), ("Esc", "Normal")),
+                (("移动", ""), ("y", "复制"), ("p", "替换"), ("Esc", "普通模式"))),
+            "visual_line": (
+                (("move", ""), ("y", "copy"), ("p", "replace"), ("Esc", "Normal")),
+                (("移动", ""), ("y", "复制"), ("p", "替换"), ("Esc", "普通模式"))),
+        }.get(c.note_mode)
+        if pairs is None:
+            pairs = ((("i/a", "insert"),), (("i/a", "插入"),))
+        return StatusModel(label, _make_status_items(lang, pairs[0], pairs[1]), c.message)
+
     mode = "NAV" if c.nav_visible else ("WORD" if c.view == "word" else
                                         ("RESULT" if c.view == "result" else
                                          ("SETTINGS" if c.view == "settings" else "NORMAL")))
     find_active = (c.find_pat and c.find_allowed() and c.find_hits
                    and c.find_idx >= 0)
     if find_active and mode == "NORMAL":
-        msg = (c.message + " · ") if c.message else ""
-        return f" {msg}FIND · {tr(c.lang, 'find_hint')}"
-    hint = {
-        "NAV": tr(c.lang, "nav_hint"),
-        "NORMAL": tr(c.lang, "normal_hint"),
-        "WORD": tr(c.lang, "word_hint"),
-        "RESULT": tr(c.lang, "result_hint"),
-        "SETTINGS": tr(c.lang, "settings_title"),
-    }[mode]
-    msg = (c.message + " · ") if c.message else ""
-    return f" {msg}{mode} · {hint}"
+        return StatusModel("FIND", _make_status_items(lang,
+            (("n", "next"), ("N", "prev"), ("Ctrl-D", "down 5"),
+             ("Ctrl-U", "up 5"), ("g/G", "first/last"),
+             ("Enter", "accept"), ("Esc", "exit")),
+            (("n", "下一个"), ("N", "上一个"), ("Ctrl-D", "下5"),
+             ("Ctrl-U", "上5"), ("g/G", "首末"),
+             ("Enter", "确认"), ("Esc", "退出"))), c.message)
+    if c.verse_select:
+        return StatusModel("V-SEL", _make_status_items(lang,
+            (("j/k", "extend"), ("y", "yank"), ("Esc", "cancel")),
+            (("j/k", "扩展"), ("y", "复制"), ("Esc", "取消"))), c.message)
+    if mode == "NORMAL":
+        return StatusModel(mode, _NORMAL_STATUS_ITEMS[lang], c.message)
+
+    mode_pairs = {
+        "NAV": (
+            (("j/k", "move"), ("Ctrl-D", "down 5"), ("Ctrl-U", "up 5"),
+             ("l/h", "column"), ("Enter", "read"), ("y", "copy"), ("?", "help")),
+            (("j/k", "移动"), ("Ctrl-D", "下5"), ("Ctrl-U", "上5"),
+             ("l/h", "切换列"), ("Enter", "阅读"), ("y", "复制"), ("?", "帮助"))),
+        "WORD": (
+            (("j/k", "select"), ("Ctrl-D", "down 5"), ("Ctrl-U", "up 5"),
+             ("g/G", "first/last"), ("Enter", "jump"), ("Esc", "back")),
+            (("j/k", "选择"), ("Ctrl-D", "下5"), ("Ctrl-U", "上5"),
+             ("g/G", "首末"), ("Enter", "跳转"), ("Esc", "返回"))),
+        "RESULT": (
+            (("j/k", "select"), ("Ctrl-D", "down 5"), ("Ctrl-U", "up 5"),
+             ("g/G", "first/last"), ("Enter", "jump"), ("Esc", "back")),
+            (("j/k", "选择"), ("Ctrl-D", "下5"), ("Ctrl-U", "上5"),
+             ("g/G", "首末"), ("Enter", "跳转"), ("Esc", "返回"))),
+        "SETTINGS": (
+            (("j/k", "move"), ("Enter", "toggle"), ("Esc", "back")),
+            (("j/k", "移动"), ("Enter", "切换"), ("Esc", "返回"))),
+    }
+    en, zh = mode_pairs[mode]
+    return StatusModel(mode, _make_status_items(lang, en, zh), c.message)
+
+
+def _status(c: Controller) -> str:
+    model = _status_model(c)
+    body = " · ".join(
+        (item.shortcut + (" " + item.explanation if item.explanation else ""))
+        for item in model.items
+    )
+    message = (model.message + " · ") if model.message else ""
+    return f" {message}{model.label} · {body} "
 
 
 def _nav_widths(w: int) -> tuple[list[int], int]:
@@ -2379,6 +2755,48 @@ def _wrap_plain(text: str, width: int) -> list[str]:
         rows.append(prefix.rstrip())
         remaining = remaining[cut:].lstrip()
     rows.append(remaining)
+    return rows
+
+
+def _wrap_plain_pos(text: str, width: int) -> list[tuple[str, int]]:
+    """Like :func:`_wrap_plain` but also returns the original-text start
+    character offset of each wrapped row.
+
+    Returns a list of ``(row_text, char_start)`` tuples where *char_start* is
+    the index into the original *text* at which the row's (un-stripped) content
+    begins.  This lets callers map a cursor character position to a display
+    row + column.
+    """
+    if not text:
+        return [("", 0)]
+    width = max(1, width)
+    rows: list[tuple[str, int]] = []
+    remaining = text
+    pos = 0
+    while _cell_width(remaining) > width:
+        prefix = _slice_cells(remaining, width)
+        cut = len(prefix)
+        if cut == 0:
+            prefix, cut = remaining[0], 1
+        if (cut < len(remaining) and not remaining[cut - 1].isspace()
+                and not remaining[cut].isspace()):
+            word_start = cut
+            while word_start > 0 and not remaining[word_start - 1].isspace():
+                word_start -= 1
+            word_end = cut
+            while word_end < len(remaining) and not remaining[word_end].isspace():
+                word_end += 1
+            word = remaining[word_start:word_end]
+            before = remaining[:word_start]
+            has_wide_chars = any(_char_cells(ch) == 2 for ch in word)
+            if before.strip() and _cell_width(word) <= width and not has_wide_chars:
+                prefix = before.rstrip()
+                cut = word_start
+        rows.append((prefix.rstrip(), pos))
+        old_len = len(remaining)
+        remaining = remaining[cut:].lstrip()
+        pos += old_len - len(remaining)
+    rows.append((remaining, pos))
     return rows
 
 
@@ -2573,32 +2991,76 @@ def _note_selected_spans(c: Controller) -> dict[int, tuple[int, int]]:
     return spans
 
 
+def _editor_cursor_row_col(c: Controller, avail: int) -> tuple[int, int]:
+    """Return ``(display_row, display_col)`` of the note cursor within the
+    full :meth:`editor_lines` output (row 0 = header), accounting for
+    word-wrapping at *avail* cells.
+    """
+    ed = c.editor_lines()
+    _rows, line_row = _build_rows(ed, avail, False, wrap=True)
+    cursor_logical = 2 + c.note_cy
+    if cursor_logical >= len(line_row):
+        return 0, 0
+    base_row = line_row[cursor_logical]
+    line = c.note_lines[c.note_cy]
+    wrapped = _wrap_plain_pos(line, avail)
+    sub_row = 0
+    col = _cell_width(line[:c.note_cx])
+    for i, (_row_text, char_start) in enumerate(wrapped):
+        if i == len(wrapped) - 1:
+            sub_row = i
+            col = _cell_width(line[char_start:c.note_cx])
+            break
+        next_start = wrapped[i + 1][1]
+        if c.note_cx < next_start:
+            sub_row = i
+            col = _cell_width(line[char_start:c.note_cx])
+            break
+    return base_row + sub_row, col
+
+
 def _highlight_note_selection(screen, c: Controller, editor_top: int,
                               width: int, color: bool) -> None:
     try:
         height, _screen_width = screen.stdscr.getmaxyx()
     except (AttributeError, curses.error):
         height = -1
+    avail = max(8, width)
+    ed = c.editor_lines()
+    _rows, line_row = _build_rows(ed, avail, False, wrap=True)
     for line_idx, (start, end) in _note_selected_spans(c).items():
-        row = editor_top + 2 + line_idx
-        if height >= 0 and row >= height - 1:
-            continue
         line = c.note_lines[line_idx]
-        col = _cell_width(line[:start])
-        cells = max(1, _cell_width(line[start:end]))
-        if col >= width:
-            continue
-        try:
-            screen.stdscr.chgat(row, col, min(cells, width - col),
-                                curses.A_REVERSE | _attr(KIND_NOTE, color))
-        except (AttributeError, curses.error):
-            pass
+        wrapped = _wrap_plain_pos(line, avail)
+        base_row = line_row[2 + line_idx] if 2 + line_idx < len(line_row) else 0
+        for i, (_row_text, char_start) in enumerate(wrapped):
+            row = editor_top + base_row + i - c.editor_scroll
+            if height >= 0 and row >= height - 1:
+                continue
+            if row < editor_top:
+                continue
+            row_end = (wrapped[i + 1][1] if i + 1 < len(wrapped)
+                       else len(line))
+            # Intersect [start, end) with [char_start, row_end)
+            sel_s = max(start, char_start)
+            sel_e = min(end, row_end)
+            if sel_e <= sel_s:
+                continue
+            col = _cell_width(line[char_start:sel_s])
+            cells = max(1, _cell_width(line[sel_s:sel_e]))
+            if col >= width:
+                continue
+            try:
+                screen.stdscr.chgat(row, col, min(cells, width - col),
+                                    curses.A_REVERSE | _attr(KIND_NOTE, color))
+            except (AttributeError, curses.error):
+                pass
 
 
 def _position_editor_cursor(screen, c: Controller, top, verse_h, w):
-    # editor pane starts after the divider; content begins 2 lines in (header + blank)
-    row = top + verse_h + 1 + 2 + c.note_cy
-    col = _cell_width(c.note_lines[c.note_cy][:c.note_cx])
+    # editor pane starts after the divider; editor_lines row 0 = header
+    avail = max(8, w)
+    display_row, col = _editor_cursor_row_col(c, avail)
+    row = top + verse_h + 1 + display_row - c.editor_scroll
     h, ww = screen.stdscr.getmaxyx()
     if 0 <= row < h - 1:
         try:
@@ -2634,6 +3096,8 @@ def _handle_vim_note_key(screen, c: Controller, ch) -> None:
             c.insert_newline()
         elif ch in (curses.KEY_BACKSPACE, 8, 127, 263, "\x7f", "\b", "\x08"):
             c.backspace()
+        elif ch in (22, "\x16"):  # Ctrl-V — paste from system clipboard
+            c.paste_note_clipboard()
         elif ch == curses.KEY_LEFT:
             c.cursor_move(0, -1)
         elif ch == curses.KEY_RIGHT:
@@ -2736,6 +3200,8 @@ def _edit_loop(screen, c: Controller):
             c.insert_newline()
         elif ch in ("\x7f", "\b", "\x08"):
             c.backspace()
+        elif ch == "\x16":  # Ctrl-V — paste from system clipboard
+            c.paste_note_clipboard()
         elif ch.isprintable() or ch == "\t":
             c.insert_char(ch)
         return
@@ -2745,6 +3211,8 @@ def _edit_loop(screen, c: Controller):
         c.insert_newline()
     elif ch in (curses.KEY_BACKSPACE, 8, 127, 263):
         c.backspace()
+    elif ch == 22:  # Ctrl-V — paste from system clipboard
+        c.paste_note_clipboard()
     elif ch == curses.KEY_LEFT:
         c.cursor_move(0, -1)
     elif ch == curses.KEY_RIGHT:
@@ -3046,6 +3514,44 @@ def _handle(screen, c: Controller, key, scroll, lines, focus_line, body_h) -> in
             c.exit_result_view()
         return 0
     # verse view
+    if c.verse_select:
+        # V-mode: j/k moves focus (extends selection), y yanks, Esc exits
+        if k in (ord("j"), curses.KEY_DOWN):
+            c.move_focus(1)
+            return scroll
+        if k in (ord("k"), curses.KEY_UP):
+            c.move_focus(-1)
+            return scroll
+        if k == 4:  # Ctrl-D
+            c.move_focus(5)
+            return scroll
+        if k == 21:  # Ctrl-U
+            c.move_focus(-5)
+            return scroll
+        if k == ord("g"):
+            keys = c.verse_list()
+            if keys:
+                ch, v = keys[0]
+                c.goto(Node(c.focus.book_idx, ch, v), view="verse", word_idx=None)
+            return 0
+        if k == ord("G"):
+            keys = c.verse_list()
+            if keys:
+                ch, v = keys[-1]
+                c.goto(Node(c.focus.book_idx, ch, v), view="verse", word_idx=None)
+            return 10**9
+        if k == ord("y"):
+            c.copy_selected_verses()
+            return 0
+        if k == 27:
+            c.end_verse_select()
+            return 0
+        # any other key is ignored in V-mode
+        return 0
+    if k == ord("V"):
+        if c.scope == "window":
+            c.begin_verse_select()
+        return 0
     if k in (ord("j"), curses.KEY_DOWN):
         c.move_focus(1)
         return scroll
