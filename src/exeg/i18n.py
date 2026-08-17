@@ -63,6 +63,7 @@ S = {
     "copied_verse": {"en": "copied {ref}", "zh": "已复制 {ref}"},
     "copied_verses": {"en": "copied {a}–{b}", "zh": "已复制 {a}–{b}"},
     "copied_note": {"en": "note text copied", "zh": "已复制笔记内容"},
+    "cut_note": {"en": "note text cut", "zh": "已剪切笔记内容"},
     "copy_failed": {"en": "copy failed: {e}", "zh": "复制失败：{e}"},
     "pasted_note": {"en": "clipboard pasted", "zh": "已粘贴剪贴板内容"},
     "paste_failed": {"en": "paste failed: {e}", "zh": "粘贴失败：{e}"},

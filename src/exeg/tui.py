@@ -1412,6 +1412,43 @@ class Controller:
             self.message = tr(self.lang, "copy_failed", e=error)
         return ok, error
 
+    def delete_note_selection(self, yank: bool = True) -> None:
+        """Visual-mode delete (vim ``d``/``x``): cut the selection.
+
+        With ``yank=False`` the black-hole register (``"_``) is emulated:
+        the selection is removed without touching the system clipboard.
+        """
+        selected = self.note_selection_range()
+        if selected is None:
+            return
+        if yank:
+            linewise = self.note_mode == "visual_line"
+            ok, error = _copy_clipboard(self._selected_note_text(linewise))
+            self.message = (tr(self.lang, "cut_note") if ok
+                            else tr(self.lang, "copy_failed", e=error))
+        (start_y, start_x), (end_y, end_x) = selected
+        if self.note_mode == "visual_line":
+            del self.note_lines[start_y:end_y + 1]
+            if not self.note_lines:
+                self.note_lines = [""]
+            self.note_cy = min(start_y, len(self.note_lines) - 1)
+            self.note_cx = 0
+        else:
+            if start_y == end_y:
+                line = self.note_lines[start_y]
+                self.note_lines[start_y] = line[:start_x] + line[end_x + 1:]
+            else:
+                joined = (self.note_lines[start_y][:start_x]
+                          + self.note_lines[end_y][end_x + 1:])
+                self.note_lines[start_y:end_y + 1] = [joined]
+            self.note_cy = start_y
+            self.note_cx = min(start_x,
+                               max(0, len(self.note_lines[start_y]) - 1))
+        self.note_mode = "normal"
+        self.note_anchor = None
+        self.note_pending = ""
+        self.note_dirty = True
+
     def _delete_note_selection(self) -> tuple[int, int]:
         selected = self.note_selection_range()
         if selected is None:
@@ -1718,7 +1755,7 @@ $ Ctrl-C       discard this editing session
 $ Ctrl-V       paste from the system clipboard (multi-line text wraps)
 $ Arrow keys   move the inline editor cursor
 Notes are stored as local Markdown files. A pencil mark identifies verses that already have notes.
-Optional Vim-style note keys are disabled by default and can be enabled in Settings for the inline editor. The note opens in Normal mode, so you can yank text without typing: press i/a to insert, Esc to return to Normal. Normal/Visual modes make system clipboard copy and paste convenient: yy copies a line; v/V selects and y copies; p/P pastes; :wq or ZZ saves; :q!, :!q, or ZQ discards; :q leaves an unchanged note without saving.
+Optional Vim-style note keys are disabled by default and can be enabled in Settings for the inline editor. The note opens in Normal mode, so you can yank text without typing: press i/a to insert, Esc to return to Normal. Normal/Visual modes make system clipboard copy and paste convenient: yy copies a line; v/V selects and y copies, d or x cuts, "_d deletes without touching the clipboard; p/P pastes; :wq or ZZ saves; :q!, :!q, or ZQ discards; :q leaves an unchanged note without saving.
 For IME-heavy Chinese input, use :set editor popup. The popup editor accepts normal terminal input and ignores Vim-style keys; press Ctrl-D to finish or Ctrl-C to cancel. A blank submission keeps the existing note.
 
 # Find in preview
@@ -1861,7 +1898,7 @@ $ Esc          保存并退出内嵌编辑器
 $ Ctrl-C       放弃本次编辑
 $ 方向键       移动内嵌编辑器光标
 笔记以本地 Markdown 文件保存。已有笔记的经节旁会显示铅笔标记。
-可选的 Vim 风格笔记键位默认关闭，可在设置页为内嵌编辑器启用。笔记以普通模式打开，可直接抽取文本而无需进入插入：按 i/a 插入，Esc 回到普通模式。普通与可视模式便于使用系统剪贴板复制粘贴：yy 复制整行；v/V 选择后按 y 复制；p/P 粘贴；:wq 或 ZZ 保存；:q!、:!q 或 ZQ 放弃；:q 在未修改时直接退出不保存。
+可选的 Vim 风格笔记键位默认关闭，可在设置页为内嵌编辑器启用。笔记以普通模式打开，可直接抽取文本而无需进入插入：按 i/a 插入，Esc 回到普通模式。普通与可视模式便于使用系统剪贴板复制粘贴：yy 复制整行；v/V 选择后按 y 复制、d 或 x 剪切、"_d 删除（不写入剪贴板）；p/P 粘贴；:wq 或 ZZ 保存；:q!、:!q 或 ZQ 放弃；:q 在未修改时直接退出不保存。
 中文输入法较多时，可使用 :set editor popup。弹出编辑器使用普通终端输入且忽略 Vim 键位；Ctrl-D 完成，Ctrl-C 取消；空白提交会保留原笔记。
 
 # 当前预览内查找
@@ -2606,11 +2643,15 @@ def _status_model(c: Controller) -> StatusModel:
                 (("i/a", "插入"), ("v/V", "选择"), ("yy", "复制"),
                  ("p/P", "粘贴"), (":wq/ZZ", "保存"), (":q/:q!/!q", "退出"))),
             "visual": (
-                (("move", ""), ("y", "copy"), ("p", "replace"), ("Esc", "Normal")),
-                (("移动", ""), ("y", "复制"), ("p", "替换"), ("Esc", "普通模式"))),
+                (("move", ""), ("y", "copy"), ("d", "cut"), ('"_d', "delete"),
+                 ("p", "replace"), ("Esc", "Normal")),
+                (("移动", ""), ("y", "复制"), ("d", "剪切"), ('"_d', "删除"),
+                 ("p", "替换"), ("Esc", "普通模式"))),
             "visual_line": (
-                (("move", ""), ("y", "copy"), ("p", "replace"), ("Esc", "Normal")),
-                (("移动", ""), ("y", "复制"), ("p", "替换"), ("Esc", "普通模式"))),
+                (("move", ""), ("y", "copy"), ("d", "cut"), ('"_d', "delete"),
+                 ("p", "replace"), ("Esc", "Normal")),
+                (("移动", ""), ("y", "复制"), ("d", "剪切"), ('"_d', "删除"),
+                 ("p", "替换"), ("Esc", "普通模式"))),
         }.get(c.note_mode)
         if pairs is None:
             pairs = ((("i/a", "insert"),), (("i/a", "插入"),))
@@ -3129,6 +3170,15 @@ def _handle_vim_note_key(screen, c: Controller, ch) -> None:
         if pending == "y" and ch == "y":
             c.yank_note_selection(linewise=True)
             return
+        if pending == '"':
+            # register prefix; only the black-hole register "_ is supported
+            if ch == "_" and c.note_mode in ("visual", "visual_line"):
+                c.note_pending = '"_'
+            return
+        if pending == '"_':
+            if ch in ("d", "x") and c.note_mode in ("visual", "visual_line"):
+                c.delete_note_selection(yank=False)
+            return
 
     if ch in ("h", curses.KEY_LEFT):
         _vim_move(c, dx=-1)
@@ -3153,6 +3203,10 @@ def _handle_vim_note_key(screen, c: Controller, ch) -> None:
         c.note_pending = "y"
     elif ch == "y" and c.note_mode in ("visual", "visual_line"):
         c.yank_note_selection()
+    elif ch in ("d", "x") and c.note_mode in ("visual", "visual_line"):
+        c.delete_note_selection()
+    elif ch == '"' and c.note_mode in ("visual", "visual_line"):
+        c.note_pending = '"'
     elif ch == "v" and c.note_mode == "normal":
         c.note_mode = "visual"
         c.note_anchor = (c.note_cy, c.note_cx)

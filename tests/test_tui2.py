@@ -839,6 +839,112 @@ def test_vim_line_visual_yank_includes_complete_lines(tmp_notes, monkeypatch):
     assert copied == ["alpha\nbeta\n"]
 
 
+def test_vim_character_visual_d_cuts_selection(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["alpha", "beta"]
+    c.note_cy, c.note_cx, c.note_mode = 0, 1, "normal"
+    copied = []
+    monkeypatch.setattr(tui, "_copy_clipboard",
+                        lambda text: (copied.append(text) or True, ""))
+    tui._handle_vim_note_key(None, c, "v")
+    tui._handle_vim_note_key(None, c, "l")
+    tui._handle_vim_note_key(None, c, "l")
+    tui._handle_vim_note_key(None, c, "d")
+    assert copied == ["lph"]
+    assert c.note_lines == ["aa", "beta"]
+    assert c.note_mode == "normal" and c.note_anchor is None
+    assert (c.note_cy, c.note_cx) == (0, 1)
+    assert c.note_dirty is True
+
+
+def test_vim_character_visual_x_cuts_selection(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["alpha"]
+    c.note_cy, c.note_cx, c.note_mode = 0, 0, "normal"
+    copied = []
+    monkeypatch.setattr(tui, "_copy_clipboard",
+                        lambda text: (copied.append(text) or True, ""))
+    tui._handle_vim_note_key(None, c, "v")
+    tui._handle_vim_note_key(None, c, "l")
+    tui._handle_vim_note_key(None, c, "x")
+    assert copied == ["al"]
+    assert c.note_lines == ["pha"]
+    assert c.note_mode == "normal"
+
+
+def test_vim_multiline_character_visual_delete(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["alpha", "beta", "gamma"]
+    c.note_cy, c.note_cx, c.note_mode = 0, 3, "normal"
+    monkeypatch.setattr(tui, "_copy_clipboard", lambda _text: (True, ""))
+    tui._handle_vim_note_key(None, c, "v")
+    tui._handle_vim_note_key(None, c, "j")
+    tui._handle_vim_note_key(None, c, "0")
+    tui._handle_vim_note_key(None, c, "l")
+    tui._handle_vim_note_key(None, c, "d")
+    assert c.note_lines == ["alpta", "gamma"]
+    assert (c.note_cy, c.note_cx) == (0, 3)
+
+
+def test_vim_line_visual_d_deletes_whole_lines(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["alpha", "beta", "gamma"]
+    c.note_cy, c.note_mode = 0, "normal"
+    copied = []
+    monkeypatch.setattr(tui, "_copy_clipboard",
+                        lambda text: (copied.append(text) or True, ""))
+    tui._handle_vim_note_key(None, c, "V")
+    tui._handle_vim_note_key(None, c, "j")
+    tui._handle_vim_note_key(None, c, "d")
+    assert copied == ["alpha\nbeta\n"]
+    assert c.note_lines == ["gamma"]
+    assert c.note_mode == "normal"
+    assert (c.note_cy, c.note_cx) == (0, 0)
+
+
+def test_vim_line_visual_delete_keeps_one_line(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["only"]
+    c.note_cy, c.note_mode = 0, "normal"
+    monkeypatch.setattr(tui, "_copy_clipboard", lambda _text: (True, ""))
+    tui._handle_vim_note_key(None, c, "V")
+    tui._handle_vim_note_key(None, c, "d")
+    assert c.note_lines == [""]
+
+
+def test_vim_visual_blackhole_delete_skips_clipboard(tmp_notes, monkeypatch):
+    c = vim_editor_controller()
+    c.note_lines = ["alpha", "beta"]
+    c.note_cy, c.note_cx, c.note_mode = 0, 0, "normal"
+    copied = []
+    monkeypatch.setattr(tui, "_copy_clipboard",
+                        lambda text: (copied.append(text) or True, ""))
+    tui._handle_vim_note_key(None, c, "V")
+    tui._handle_vim_note_key(None, c, '"')
+    tui._handle_vim_note_key(None, c, "_")
+    tui._handle_vim_note_key(None, c, "d")
+    assert copied == []
+    assert c.note_lines == ["beta"]
+    assert c.note_mode == "normal" and c.note_anchor is None
+    assert c.note_dirty is True
+
+
+def test_vim_visual_blackhole_still_selects_after_quote(tmp_notes, monkeypatch):
+    # " is a pending prefix, not a motion: selection must stay intact
+    c = vim_editor_controller()
+    c.note_lines = ["alpha"]
+    c.note_cy, c.note_cx, c.note_mode = 0, 1, "normal"
+    monkeypatch.setattr(tui, "_copy_clipboard", lambda _text: (True, ""))
+    tui._handle_vim_note_key(None, c, "v")
+    tui._handle_vim_note_key(None, c, "l")
+    tui._handle_vim_note_key(None, c, '"')
+    assert c.note_mode == "visual" and c.note_anchor == (0, 1)
+    tui._handle_vim_note_key(None, c, "_")
+    assert c.note_mode == "visual"
+    tui._handle_vim_note_key(None, c, "d")
+    assert c.note_lines == ["aha"]
+
+
 def test_vim_visual_selected_spans_are_visible_ranges(tmp_notes):
     c = vim_editor_controller()
     c.note_lines = ["alpha", "beta"]
