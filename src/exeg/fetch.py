@@ -3,6 +3,7 @@ import json
 import re
 import ssl
 import sys
+import time
 import unicodedata
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -153,14 +154,27 @@ def _ssl_context() -> ssl.SSLContext:
     return _SSL_CTX
 
 
-def download(url: str, dest, force: bool = False):
+def download(url: str, dest, force: bool = False, retries: int = 4,
+             sleep=time.sleep):
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists() and not force:
         return dest
     req = urllib.request.Request(url, headers={"User-Agent": "exeg/0.1 (personal study tool)"})
-    with urllib.request.urlopen(req, timeout=60, context=_ssl_context()) as r:
-        dest.write_bytes(r.read())
-    return dest
+    delay = 2
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=60, context=_ssl_context()) as r:
+                dest.write_bytes(r.read())
+            return dest
+        except urllib.error.HTTPError as e:
+            retryable = e.code == 429 or 500 <= e.code < 600
+            if not retryable or attempt == retries:
+                raise
+            retry_after = e.headers.get("Retry-After") if e.headers else None
+            wait = int(retry_after) if retry_after and retry_after.isdigit() else delay
+            sleep(wait)
+            delay = min(delay * 2, 60)
+    return dest  # unreachable: the final attempt either returns or raises
 
 
 def parse_strongs_js(js_text: str) -> dict:

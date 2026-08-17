@@ -137,3 +137,125 @@ def test_cuvs_fix_leaves_unrelated_verses_alone():
     # no fix registered for this verse at all
     text = "起初 神创造天地。"
     assert _cuvs("Gen", 1, 1, text) == text
+
+
+# ---- download() resilience --------------------------------------------------
+
+def _http_error(code, headers=None):
+    import io
+    import urllib.error
+    return urllib.error.HTTPError("https://x.test/f", code, "err",
+                                  headers or {}, io.BytesIO(b""))
+
+
+def test_download_retries_on_429_then_succeeds(tmp_path, monkeypatch):
+    import urllib.request
+    calls = []
+    sleeps = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b"payload"
+
+    def fake_urlopen(req, timeout=None, context=None):
+        calls.append(req.full_url)
+        if len(calls) < 3:
+            raise _http_error(429)
+        return FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    dest = tmp_path / "f.txt"
+    result = fetch.download("https://x.test/f", dest, sleep=sleeps.append)
+    assert result.read_bytes() == b"payload"
+    assert len(calls) == 3
+    assert sleeps == [2, 4]  # exponential backoff between attempts
+
+
+def test_download_honors_retry_after_header(tmp_path, monkeypatch):
+    import email.message
+    import urllib.request
+    sleeps = []
+    calls = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b"ok"
+
+    headers = email.message.Message()
+    headers["Retry-After"] = "7"
+
+    def fake_urlopen(req, timeout=None, context=None):
+        calls.append(1)
+        if len(calls) == 1:
+            raise _http_error(429, headers)
+        return FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    fetch.download("https://x.test/f", tmp_path / "f.txt", sleep=sleeps.append)
+    assert sleeps == [7]
+
+
+def test_download_gives_up_after_max_retries(tmp_path, monkeypatch):
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        lambda *a, **k: (_ for _ in ()).throw(_http_error(429)))
+    import pytest
+    with pytest.raises(urllib.error.HTTPError):
+        fetch.download("https://x.test/f", tmp_path / "f.txt",
+                       sleep=lambda _s: None)
+
+
+def test_download_does_not_retry_other_errors(tmp_path, monkeypatch):
+    import urllib.request
+    calls = []
+
+    def fake_urlopen(*a, **k):
+        calls.append(1)
+        raise _http_error(404)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    import pytest
+    with pytest.raises(urllib.error.HTTPError):
+        fetch.download("https://x.test/f", tmp_path / "f.txt",
+                       sleep=lambda _s: None)
+    assert len(calls) == 1
+
+
+def test_download_retries_on_5xx(tmp_path, monkeypatch):
+    import urllib.request
+    calls = []
+    sleeps = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b"payload"
+
+    def fake_urlopen(req, timeout=None, context=None):
+        calls.append(1)
+        if len(calls) == 1:
+            raise _http_error(503)
+        return FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    dest = tmp_path / "f.txt"
+    fetch.download("https://x.test/f", dest, sleep=sleeps.append)
+    assert dest.read_bytes() == b"payload"
+    assert len(calls) == 2 and sleeps == [2]
