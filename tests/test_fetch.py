@@ -101,3 +101,39 @@ def test_optional_pack_status(monkeypatch):
     assert fetch.optional_pack_status() == "partial"
     monkeypatch.setattr(fetch, "dataset_installed", lambda _name: True)
     assert fetch.optional_pack_status() == "installed"
+
+
+# ---- CUVS upstream text fixes (GitHub issue #1) ---------------------------
+
+def _cuvs(osis, chapter, verse, text):
+    from exeg.corpus import Verse
+    return fetch._apply_cuvs_fixes(osis, [Verse(chapter, verse, text)])[0].text
+
+
+def test_cuvs_fix_replaces_corrupted_glyph():
+    # ⶍ (U+2D8D ETHIOPIC SYLLABLE DDOA) is a corrupted 墩 in eBible cmn-cu89s
+    assert "树墩子" in _cuvs("Isa", 6, 13, "像栗树、橡树虽被砍伐， 树ⶍ子却仍存留。")
+    assert "木墩子" in _cuvs("Isa", 44, 19, "我岂可向木ⶍ子叩拜呢？」")
+
+
+def test_cuvs_fix_restores_missing_lun():
+    assert "耶书仑" in _cuvs("Isa", 44, 2, "我所拣选的 耶书 哪， 不要害怕！")
+    assert "沙仑" in _cuvs("Isa", 35, 2, "并 迦密与 沙 的华美，必赐给它。")
+    assert "拉沙仑" in _cuvs("Josh", 12, 18, "一个是 亚弗王，一个是 拉沙 王，")
+
+
+def test_cuvs_fix_restores_missing_chen():
+    assert "茵陈" in _cuvs("Jer", 9, 15, "我必将茵 给这百姓吃")
+    assert "茵陈" in _cuvs("Jer", 23, 15, "我必将茵 给他们吃")
+    # Rev 8:11 has two occurrences in one verse — both must be fixed
+    text = _cuvs("Rev", 8, 11, "（这星名叫「茵 」。）众水的三分之一变为茵 ，因水变苦")
+    assert text.count("茵陈") == 2
+
+
+def test_cuvs_fix_leaves_unrelated_verses_alone():
+    # 以利沙 (Elisha) ends with 沙 but is not missing 仑
+    text = "以利沙 对仆人说：「究竟当为她做什么呢？」"
+    assert _cuvs("2Kgs", 4, 14, text) == text
+    # no fix registered for this verse at all
+    text = "起初 神创造天地。"
+    assert _cuvs("Gen", 1, 1, text) == text

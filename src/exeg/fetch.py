@@ -66,6 +66,78 @@ STRONGS_URLS = {
 }
 EBIBLE = {"web": "engwebp", "kjv": "eng-kjv", "cuvs": "cmn-cu89s", "asv": "eng-asv"}
 CORE_VERSIONS = ("cuvs", "asv")
+
+# Known CUVS (cmn-cu89s) text errors from eBible.org: characters missing or
+# corrupted in the upstream USFM source.  Keyed by (osis, chapter, verse);
+# each value is a list of (bad, good) substring replacements applied in order.
+CUVS_FIXES: dict[str, dict[tuple[int, int], list[tuple[str, str]]]] = {
+    "Isa": {
+        (6, 13): [("树ⶍ子", "树墩子")],
+        (33, 9): [("沙 ", "沙仑")],
+        (35, 2): [("沙 ", "沙仑")],
+        (44, 2): [("耶书 ", "耶书仑")],
+        (44, 19): [("木ⶍ子", "木墩子")],
+        (65, 10): [("沙 ", "沙仑")],
+    },
+    "Deut": {
+        (29, 18): [("茵 ", "茵陈")],
+        (32, 15): [("耶书 ", "耶书仑")],
+        (33, 5): [("耶书 ", "耶书仑")],
+        (33, 26): [("耶书 ", "耶书仑")],
+    },
+    "Jer": {
+        (9, 15): [("茵 ", "茵陈")],
+        (23, 15): [("茵 ", "茵陈")],
+    },
+    "Amos": {
+        (5, 7): [("茵 ", "茵陈")],
+        (6, 12): [("茵 ", "茵陈")],
+    },
+    "Prov": {
+        (5, 4): [("茵 ", "茵陈")],
+    },
+    "Rev": {
+        (8, 11): [("茵 ", "茵陈")],
+    },
+    "Lam": {
+        (3, 15): [("茵 ", "茵陈")],
+        (3, 19): [("茵 ", "茵陈")],
+    },
+    "Song": {
+        (2, 1): [("沙 ", "沙仑")],
+    },
+    "Josh": {
+        (12, 18): [("拉沙 ", "拉沙仑")],
+    },
+    "Acts": {
+        (9, 35): [("沙 ", "沙仑")],
+    },
+    "1Chr": {
+        (5, 16): [("沙 ", "沙仑")],
+        (27, 29): [("沙 ", "沙仑")],
+    },
+    "Neh": {
+        (3, 15): [("沙 ", "沙仑")],
+    },
+}
+
+
+def _apply_cuvs_fixes(osis: str, verses: list[Verse]) -> list[Verse]:
+    """Apply known text corrections to CUVS verses from eBible.org."""
+    fixes = CUVS_FIXES.get(osis)
+    if not fixes:
+        return verses
+    out = []
+    for v in verses:
+        repls = fixes.get((v.chapter, v.verse))
+        if repls:
+            text = v.text
+            for old, new in repls:
+                text = text.replace(old, new)
+            out.append(Verse(v.chapter, v.verse, text))
+        else:
+            out.append(v)
+    return out
 OPTIONAL_PACK = ("strongs", "sblgnt", "wlc", "web", "kjv", "vulgate")
 VULGATE_URL = (f"{RAW}/jrichter/ClementineVulgateConverter/master/lat-clementine-vul.usfx.xml")
 _OSIS_NS = "{http://www.bibletechnologies.net/2003/OSIS/namespace}"
@@ -205,6 +277,8 @@ def fetch_ebible(versions=None, log=print) -> None:
                 continue
             osis = canon.USFM_TO_OSIS.get(code)
             if osis and verses:
+                if version == "cuvs":
+                    verses = _apply_cuvs_fixes(osis, verses)
                 corpus.write_verses(version, osis, verses)
                 count += 1
         log(f"{version}: {count} books")
